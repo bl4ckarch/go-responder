@@ -1,5 +1,17 @@
+# build artifacts
 go-responder
 go-responder-static
+*.exe
+
+# test artifacts
+coverage.out
 hashes
-*.txt
-20260912200650_bloodhound.zip
+hashes.txt
+tgs_out
+
+# bloodhound
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
