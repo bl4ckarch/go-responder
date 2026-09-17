@@ -14,7 +14,7 @@ const nbtnsPort = 137
 func PoisonNBTNS(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", nbtnsPort))
 	if err != nil {
-		core.LogError("NBT-NS listen :%d - %v (need root?)", nbtnsPort, err)
+		core.LogError("NBT-NS: requires root privileges to bind :%d - %v", nbtnsPort, err)
 		return
 	}
 	defer conn.Close()
