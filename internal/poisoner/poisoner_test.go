@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
+
+	"go-responder/internal/core"
 )
 
 // ─── LLMNR ───────────────────────────────────────────────────────────────────
@@ -237,4 +240,162 @@ func TestIfaceByIP_InvalidIP(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-existent IP")
 	}
+}
+
+// ─── DNS ─────────────────────────────────────────────────────────────────────
+
+func TestBuildDNSResponse_DelegatesToLLMNR(t *testing.T) {
+	query := buildLLMNRQuery(0x1234, "WPAD")
+	ip := net.ParseIP("10.0.0.1").To4()
+	resp := BuildDNSResponse(query, ip)
+	if resp == nil {
+		t.Fatal("expected non-nil DNS response")
+	}
+	// Same as LLMNR response — txID echoed
+	if resp[0] != 0x12 || resp[1] != 0x34 {
+		t.Fatalf("txID mismatch: %02x%02x", resp[0], resp[1])
+	}
+}
+
+func TestBuildDNSResponse_NilForNonA(t *testing.T) {
+	query := buildLLMNRQuery(0x0001, "HOST")
+	// Set QTYPE to AAAA
+	binary.BigEndian.PutUint16(query[len(query)-4:], 0x001C)
+	if BuildDNSResponse(query, net.ParseIP("1.2.3.4")) != nil {
+		t.Fatal("non-A query should return nil")
+	}
+}
+
+func TestHandleDNSQuery_RespondsWithIP(t *testing.T) {
+	// Use a real loopback UDP pair
+	serverConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot bind UDP:", err)
+	}
+	defer serverConn.Close()
+
+	clientConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot bind client UDP:", err)
+	}
+	defer clientConn.Close()
+
+	query := buildLLMNRQuery(0xABCD, "FILESERVER")
+	ip := net.ParseIP("10.10.10.1").To4()
+
+	go HandleDNSQuery(serverConn, clientConn.LocalAddr(), query, ip)
+
+	buf := make([]byte, 512)
+	clientConn.SetDeadline(timeAfterMs(500))
+	n, _, err := clientConn.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("no response from HandleDNSQuery: %v", err)
+	}
+	if n < 4 {
+		t.Fatal("response too short")
+	}
+	if buf[0] != 0xAB || buf[1] != 0xCD {
+		t.Fatalf("txID mismatch: %02x%02x", buf[0], buf[1])
+	}
+}
+
+func TestHandleDNSQuery_AnalyzeMode(t *testing.T) {
+	import_core_analyze_mode_was := analyzeModeSaved
+	defer func() { restoreAnalyzeMode(import_core_analyze_mode_was) }()
+	setAnalyzeMode(true)
+
+	query := buildLLMNRQuery(0x0001, "WPAD")
+	serverConn, _ := net.ListenPacket("udp4", "127.0.0.1:0")
+	defer serverConn.Close()
+	src := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
+
+	// In analyze mode, HandleDNSQuery should log but not write
+	done := make(chan struct{})
+	go func() {
+		HandleDNSQuery(serverConn, src, query, net.ParseIP("10.0.0.1"))
+		close(done)
+	}()
+	<-done
+}
+
+func TestHandleDNSQuery_EmptyName(t *testing.T) {
+	conn, _ := net.ListenPacket("udp4", "127.0.0.1:0")
+	defer conn.Close()
+	// Packet with QDCOUNT=0 -> ParseLLMNRQuery returns "" -> HandleDNSQuery returns early
+	pkt := buildLLMNRQuery(0x0001, "HOST")
+	pkt[4] = 0x00
+	pkt[5] = 0x00
+	HandleDNSQuery(conn, &net.UDPAddr{IP: net.ParseIP("127.0.0.1")}, pkt, net.ParseIP("10.0.0.1"))
+}
+
+func TestHandleDNSQuery_NilConn(t *testing.T) {
+	query := buildLLMNRQuery(0x0001, "WPAD")
+	// conn=nil, should not panic (resp!=nil && conn!=nil guard)
+	HandleDNSQuery(nil, nil, query, net.ParseIP("10.0.0.1"))
+}
+
+// ─── readFull ────────────────────────────────────────────────────────────────
+
+func TestReadFull_Complete(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot listen:", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, _ := ln.Accept()
+		defer c.Close()
+		c.Write([]byte{0x01, 0x02, 0x03, 0x04, 0x05})
+	}()
+
+	client, _ := net.Dial("tcp4", ln.Addr().String())
+	defer client.Close()
+	<-done
+
+	buf := make([]byte, 5)
+	n, err := readFull(client, buf)
+	if err != nil {
+		t.Fatalf("readFull error: %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("want 5, got %d", n)
+	}
+}
+
+func TestReadFull_EOF(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot listen:", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, _ := ln.Accept()
+		c.Write([]byte{0x01, 0x02})
+		c.Close() // close before writing all bytes
+	}()
+
+	client, _ := net.Dial("tcp4", ln.Addr().String())
+	defer client.Close()
+
+	buf := make([]byte, 10)
+	n, err := readFull(client, buf)
+	if err == nil {
+		t.Fatal("expected error on EOF")
+	}
+	_ = n
+}
+
+// ─── helpers for analyze mode toggling ───────────────────────────────────────
+
+var analyzeModeSaved = core.AnalyzeMode
+
+func setAnalyzeMode(v bool)     { core.AnalyzeMode = v }
+func restoreAnalyzeMode(v bool) { core.AnalyzeMode = v }
+
+func timeAfterMs(ms int) time.Time {
+	return time.Now().Add(time.Duration(ms) * time.Millisecond)
 }

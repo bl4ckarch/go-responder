@@ -74,6 +74,31 @@ func GenPort() int {
 	return int(n.Int64()) + 20000
 }
 
+// GetIfaceLinkLocal returns the link-local IPv6 address of the named interface.
+func GetIfaceLinkLocal(name string) (net.IP, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && ip.To4() == nil && ip.IsLinkLocalUnicast() {
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("no link-local IPv6 on interface %s", name)
+}
+
 // GetIfaceIP returns the first IPv4 address of the named interface.
 func GetIfaceIP(name string) (net.IP, error) {
 	iface, err := net.InterfaceByName(name)
