@@ -45,7 +45,7 @@ func RunMITM6(iface *net.Interface, ip6 net.IP) {
 func sendRouterAdvertisements(iface *net.Interface, ip6 net.IP) {
 	pc, err := net.ListenPacket("ip6:ipv6-icmp", "::")
 	if err != nil {
-		core.LogError("mitm6 RA: raw ICMPv6 socket failed: %v (need root?)", err)
+		core.LogError("mitm6 RA: requires root privileges for raw ICMPv6 socket - %v", err)
 		return
 	}
 	defer pc.Close()
@@ -103,7 +103,7 @@ func buildRA(ip6 net.IP) []byte {
 func serveDHCPv6(iface *net.Interface, ip6 net.IP) {
 	pc, err := net.ListenPacket("udp6", "[::]:547")
 	if err != nil {
-		core.LogError("mitm6 DHCPv6: listen :547 failed: %v (need root?)", err)
+		core.LogError("mitm6 DHCPv6: requires root privileges to bind :547 - %v", err)
 		return
 	}
 	defer pc.Close()

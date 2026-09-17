@@ -14,13 +14,13 @@ const llmnrPort = 5355
 func PoisonLLMNR(ifaceIP net.IP) {
 	iface, err := IfaceByIP(ifaceIP)
 	if err != nil {
-		core.LogError("LLMNR ifaceByIP: %v", err)
+		core.LogError("LLMNR: no interface for %s - %v", ifaceIP, err)
 		return
 	}
 	group := &net.UDPAddr{IP: net.ParseIP(llmnrMulticast), Port: llmnrPort}
 	conn, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
-		core.LogError("LLMNR multicast listen - %v (need root?)", err)
+		core.LogError("LLMNR: requires root privileges to join multicast - %v", err)
 		return
 	}
 	defer conn.Close()

@@ -11,7 +11,7 @@ import (
 func ServeDNS(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:53", ifaceIP))
 	if err != nil {
-		core.LogError("DNS UDP listen :53 - %v (need root?)", err)
+		core.LogError("DNS: requires root privileges to bind :53 - %v", err)
 		return
 	}
 	core.LogInfo("DNS  listening on %s:53 (UDP+TCP)", ifaceIP)

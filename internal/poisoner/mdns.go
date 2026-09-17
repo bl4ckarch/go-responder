@@ -12,13 +12,13 @@ const mdnsPort = 5353
 func PoisonMDNS(ifaceIP net.IP) {
 	iface, err := IfaceByIP(ifaceIP)
 	if err != nil {
-		core.LogError("mDNS ifaceByIP: %v", err)
+		core.LogError("mDNS: no interface for %s - %v", ifaceIP, err)
 		return
 	}
 	group := &net.UDPAddr{IP: net.ParseIP(mdnsMulticast), Port: mdnsPort}
 	conn, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
-		core.LogError("mDNS multicast listen - %v (need root?)", err)
+		core.LogError("mDNS: requires root privileges to join multicast - %v", err)
 		return
 	}
 	defer conn.Close()
