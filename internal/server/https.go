@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"crypto/ecdsa"
@@ -13,22 +13,24 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func serveHTTPS(ifaceIP net.IP) {
+func ServeHTTPS(ifaceIP net.IP) {
 	cert, err := generateSelfSignedCert(ifaceIP.String())
 	if err != nil {
-		logError("HTTPS cert generation failed: %v", err)
+		core.LogError("HTTPS cert generation failed: %v", err)
 		return
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleHTTPNTLM)
+	mux.HandleFunc("/", HandleHTTPNTLM)
 
 	addr := fmt.Sprintf("%s:443", ifaceIP)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		logError("HTTPS listen %s — %v (need root?)", addr, err)
+		core.LogError("HTTPS listen %s — %v (need root?)", addr, err)
 		return
 	}
 
@@ -37,7 +39,7 @@ func serveHTTPS(ifaceIP net.IP) {
 		MinVersion:   tls.VersionTLS10,
 	})
 
-	logInfo("HTTPS listening on %s:443 (self-signed cert)", ifaceIP)
+	core.LogInfo("HTTPS listening on %s:443 (self-signed cert)", ifaceIP)
 	http.Serve(tlsLn, mux)
 }
 

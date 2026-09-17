@@ -8,11 +8,11 @@ all: linux windows
 
 linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" \
-		-o release/$(BINARY)-linux-amd64 .
+		-o release/$(BINARY)-linux-amd64 ./cmd/go-responder
 
 windows:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" \
-		-o release/$(BINARY)-windows-amd64.exe .
+		-o release/$(BINARY)-windows-amd64.exe ./cmd/go-responder
 
 test:
 	go test -count=1 -v -timeout 60s ./...

