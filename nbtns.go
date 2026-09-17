@@ -31,6 +31,14 @@ func poisonNBTNS(ifaceIP net.IP) {
 			continue
 		}
 		logVerbose("NBT-NS query: '%s' from %s", name, src)
+		if analyzeMode {
+			logInfo("[NBT-NS] [Analyze] query for '%s' from %s", name, src)
+			continue
+		}
+		if !shouldRespond(src, name) {
+			logVerbose("NBT-NS skipping '%s' from %s (filter)", name, src)
+			continue
+		}
 		resp := buildNBTNSResponse(pkt, ifaceIP)
 		if resp != nil {
 			conn.WriteTo(resp, src)
@@ -76,7 +84,7 @@ func decodeNBTName(encoded []byte) string {
 		hi := encoded[i] - 'A'
 		lo := encoded[i+1] - 'A'
 		c := (hi << 4) | lo
-		if c != 0x20 { // 0x20 = space = padding
+		if c != 0x20 && c != 0x00 { // skip padding spaces and null suffix byte
 			b.WriteByte(c)
 		}
 	}

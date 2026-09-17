@@ -13,6 +13,9 @@ var (
 	sessionDCERPCPort  int
 	analyzeMode        bool
 	globalChallenge    [8]byte
+	lmMode             bool   // force NTLMv1 by removing Extended Session Security flag
+	wpadEnabled        bool   // serve WPAD PAC file from HTTP server
+	wpadProxyHost      string // proxy host:port to advertise in WPAD
 )
 
 func initSession(challengeHex string) {

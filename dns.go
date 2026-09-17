@@ -81,7 +81,7 @@ func handleDNSQuery(conn net.PacketConn, src net.Addr, pkt []byte, ip net.IP) {
 		return
 	}
 	resp := buildDNSResponse(pkt, ip)
-	if resp != nil {
+	if resp != nil && conn != nil {
 		conn.WriteTo(resp, src)
 		logInfo("[DNS] Poisoned query for '%s' — responding with %s", name, ip)
 	}

