@@ -21,7 +21,7 @@ const (
 func ServeMSSQL(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:1433", ifaceIP))
 	if err != nil {
-		core.LogError("MSSQL listen :1433 — %v (need root?)", err)
+		core.LogError("MSSQL listen :1433 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("MSSQL listening on %s:1433", ifaceIP)

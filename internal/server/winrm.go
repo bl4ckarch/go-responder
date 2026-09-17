@@ -15,7 +15,7 @@ func ServeWinRM(ifaceIP net.IP) {
 	addr := fmt.Sprintf("%s:5985", ifaceIP)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		core.LogError("WinRM listen %s — %v (need root?)", addr, err)
+		core.LogError("WinRM listen %s - %v (need root?)", addr, err)
 		return
 	}
 	core.LogInfo("WinRM listening on %s:5985", ifaceIP)

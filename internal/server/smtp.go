@@ -14,7 +14,7 @@ import (
 func ServeSMTP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:25", ifaceIP))
 	if err != nil {
-		core.LogError("SMTP listen :25 — %v (need root?)", err)
+		core.LogError("SMTP listen :25 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("SMTP listening on %s:25", ifaceIP)

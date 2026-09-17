@@ -41,11 +41,11 @@ Captures NTLMv1/NTLMv2 hashes and cleartext credentials from LLMNR, NBT-NS, mDNS
 
 ### Additional
 - WPAD PAC file serving (auto-proxy poisoning)
-- Trigger file generation — SCF, URL, LNK, desktop.ini (for writable share attacks)
+- Trigger file generation - SCF, URL, LNK, desktop.ini (for writable share attacks)
 - IP and hostname allow/deny filtering (`-RespondTo`, `-DontRespondTo`, `-RespondToName`, `-DontRespondToName`)
 - NTLMv1 downgrade (`-lm`) for hashcat `-m 5500`
 - Fixed or random NTLM challenge (`-c`)
-- Analyze mode — log queries, never poison (`-A`)
+- Analyze mode - log queries, never poison (`-A`)
 - Hash deduplication and file output
 
 ## Installation
@@ -81,7 +81,7 @@ Core:
   -v                Verbose output
   -o <file>         Output file for captured hashes (default: hashes.txt)
   -c <hex>          Fixed 8-byte NTLM challenge (random if not set)
-  -A                Analyze mode — log queries but do not poison
+  -A                Analyze mode - log queries but do not poison
   -lm               Force NTLMv1 downgrade (removes EXTENDED_SESSIONSECURITY)
 
 Disable servers:
@@ -120,7 +120,7 @@ Trigger files:
 # Full capture on eth0
 sudo ./go-responder-linux-amd64 -i eth0 -v
 
-# Analyze mode — see who is querying without poisoning
+# Analyze mode - see who is querying without poisoning
 sudo ./go-responder-linux-amd64 -i eth0 -A -v
 
 # Force NTLMv1 (hashcat -m 5500)
@@ -169,4 +169,4 @@ hashcat -m 5500 hashes.txt /usr/share/wordlists/rockyou.txt    # NTLMv1
 ## Credits
 
 Based on [Responder](https://github.com/lgandx/Responder) by Laurent Gaffie (lgandx).  
-Go port — zero Python, zero dependencies, single static binary for air-gapped environments.
+Go port - zero Python, zero dependencies, single static binary for air-gapped environments.

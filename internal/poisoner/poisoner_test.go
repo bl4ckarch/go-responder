@@ -52,7 +52,7 @@ func TestParseLLMNRQuery_ResponseFlag(t *testing.T) {
 	pkt := buildLLMNRQuery(0x0002, "HOST")
 	pkt[2] = 0x80 // set QR=1 (response)
 	if ParseLLMNRQuery(pkt) != "" {
-		t.Fatal("response flag set — should return empty")
+		t.Fatal("response flag set - should return empty")
 	}
 }
 
@@ -61,7 +61,7 @@ func TestParseLLMNRQuery_ZeroQCount(t *testing.T) {
 	pkt[4] = 0x00
 	pkt[5] = 0x00
 	if ParseLLMNRQuery(pkt) != "" {
-		t.Fatal("QDCOUNT=0 — should return empty")
+		t.Fatal("QDCOUNT=0 - should return empty")
 	}
 }
 
@@ -153,7 +153,7 @@ func TestParseNBTNSQuery_ResponseFlag(t *testing.T) {
 	pkt := buildNBTNSQuery(0x0001, "HOST")
 	pkt[2] = 0x80 // QR=1
 	if ParseNBTNSQuery(pkt) != "" {
-		t.Fatal("response flag — should return empty")
+		t.Fatal("response flag - should return empty")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestParseNBTNSQuery_ZeroQCount(t *testing.T) {
 	pkt[4] = 0x00
 	pkt[5] = 0x00
 	if ParseNBTNSQuery(pkt) != "" {
-		t.Fatal("QDCOUNT=0 — should return empty")
+		t.Fatal("QDCOUNT=0 - should return empty")
 	}
 }
 

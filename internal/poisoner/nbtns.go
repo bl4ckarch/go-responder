@@ -14,7 +14,7 @@ const nbtnsPort = 137
 func PoisonNBTNS(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", nbtnsPort))
 	if err != nil {
-		core.LogError("NBT-NS listen :%d — %v (need root?)", nbtnsPort, err)
+		core.LogError("NBT-NS listen :%d - %v (need root?)", nbtnsPort, err)
 		return
 	}
 	defer conn.Close()
@@ -42,7 +42,7 @@ func PoisonNBTNS(ifaceIP net.IP) {
 		resp := BuildNBTNSResponse(pkt, ifaceIP)
 		if resp != nil {
 			conn.WriteTo(resp, src)
-			core.LogInfo("[NBT-NS] Poisoned query for '%s' — responding with %s", name, ifaceIP)
+			core.LogInfo("[NBT-NS] Poisoned query for '%s' - responding with %s", name, ifaceIP)
 		}
 	}
 }

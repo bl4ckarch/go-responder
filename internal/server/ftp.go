@@ -14,7 +14,7 @@ import (
 func ServeFTP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:21", ifaceIP))
 	if err != nil {
-		core.LogError("FTP listen :21 — %v (need root?)", err)
+		core.LogError("FTP listen :21 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("FTP  listening on %s:21", ifaceIP)

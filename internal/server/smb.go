@@ -35,7 +35,7 @@ const (
 func ServeSMB(ip net.IP) {
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:445", ip))
 	if err != nil {
-		core.LogError("SMB listen :445 — %v (need root?)", err)
+		core.LogError("SMB listen :445 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("SMB  listening on %s:445", ip)
@@ -81,7 +81,7 @@ func HandleSMB(conn net.Conn) {
 					return
 				case -2:
 					sendNB(conn, smb1SMB2UpgradeResp(msg))
-					core.LogVerbose("SMB1 multi-protocol — upgrading to SMB2")
+					core.LogVerbose("SMB1 multi-protocol - upgrading to SMB2")
 				default:
 					sendNB(conn, smb1NegotiateResp(msg, smb1FindDialect(msg)))
 				}

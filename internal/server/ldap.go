@@ -12,7 +12,7 @@ import (
 func ServeLDAP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:389", ifaceIP))
 	if err != nil {
-		core.LogError("LDAP listen :389 — %v (need root?)", err)
+		core.LogError("LDAP listen :389 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("LDAP listening on %s:389", ifaceIP)
@@ -125,7 +125,7 @@ func HandleLDAP(c net.Conn) {
 				spnego := core.WrapSPNEGOChallenge(ntlmChallenge)
 				resp := ldapBindResponse(msgID, 14, spnego)
 				c.Write(resp)
-				core.LogVerbose("LDAP NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
+				core.LogVerbose("LDAP NTLM Type1 from %s - issuing challenge", c.RemoteAddr())
 
 			case 3:
 				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)

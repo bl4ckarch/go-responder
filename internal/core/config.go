@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Session state — set once at startup by main, read by all servers.
+// Session state - set once at startup by main, read by all servers.
 var (
 	GlobalChallenge    [8]byte
 	SessionMachineName string

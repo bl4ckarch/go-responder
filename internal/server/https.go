@@ -30,7 +30,7 @@ func ServeHTTPS(ifaceIP net.IP) {
 	addr := fmt.Sprintf("%s:443", ifaceIP)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		core.LogError("HTTPS listen %s — %v (need root?)", addr, err)
+		core.LogError("HTTPS listen %s - %v (need root?)", addr, err)
 		return
 	}
 

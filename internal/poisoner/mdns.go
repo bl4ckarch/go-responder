@@ -18,7 +18,7 @@ func PoisonMDNS(ifaceIP net.IP) {
 	group := &net.UDPAddr{IP: net.ParseIP(mdnsMulticast), Port: mdnsPort}
 	conn, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
-		core.LogError("mDNS multicast listen — %v (need root?)", err)
+		core.LogError("mDNS multicast listen - %v (need root?)", err)
 		return
 	}
 	defer conn.Close()
@@ -46,7 +46,7 @@ func PoisonMDNS(ifaceIP net.IP) {
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
 			conn.WriteTo(resp, src)
-			core.LogInfo("[mDNS] Poisoned query for '%s' — responding with %s", name, ifaceIP)
+			core.LogInfo("[mDNS] Poisoned query for '%s' - responding with %s", name, ifaceIP)
 		}
 	}
 }

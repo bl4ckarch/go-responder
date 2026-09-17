@@ -26,7 +26,7 @@ func ServeHTTP(ifaceIP net.IP) {
 	addr := fmt.Sprintf("%s:80", ifaceIP)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		core.LogError("HTTP listen %s — %v (need root?)", addr, err)
+		core.LogError("HTTP listen %s - %v (need root?)", addr, err)
 		return
 	}
 	core.LogInfo("HTTP listening on %s:80", ifaceIP)
@@ -63,7 +63,7 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 
 	if auth == "" {
-		core.LogVerbose("HTTP connection from %s — sending NTLM negotiate", r.RemoteAddr)
+		core.LogVerbose("HTTP connection from %s - sending NTLM negotiate", r.RemoteAddr)
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(401)
@@ -102,9 +102,9 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		ws, dom, osVer := core.ParseNTLMNegotiate(ntlm)
 		if ws != "" || dom != "" {
-			core.LogVerbose("HTTP NTLM Type1 from %s — workstation=%s domain=%s os=%s", r.RemoteAddr, ws, dom, osVer)
+			core.LogVerbose("HTTP NTLM Type1 from %s - workstation=%s domain=%s os=%s", r.RemoteAddr, ws, dom, osVer)
 		} else {
-			core.LogVerbose("HTTP NTLM Type1 from %s — issuing challenge", r.RemoteAddr)
+			core.LogVerbose("HTTP NTLM Type1 from %s - issuing challenge", r.RemoteAddr)
 		}
 		challenge := core.GetChallenge()
 		connChallenges.Store(r.RemoteAddr, challenge)

@@ -23,7 +23,7 @@ func ServeDCERPC(ifaceIP net.IP, port int) {
 	addr := fmt.Sprintf("%s:%d", ifaceIP, port)
 	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
-		core.LogError("DCE-RPC listen %s — %v", addr, err)
+		core.LogError("DCE-RPC listen %s - %v", addr, err)
 		return
 	}
 	core.LogInfo("DCE-RPC listening on %s:%d", ifaceIP, port)

@@ -20,7 +20,7 @@ func PoisonLLMNR(ifaceIP net.IP) {
 	group := &net.UDPAddr{IP: net.ParseIP(llmnrMulticast), Port: llmnrPort}
 	conn, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
-		core.LogError("LLMNR multicast listen — %v (need root?)", err)
+		core.LogError("LLMNR multicast listen - %v (need root?)", err)
 		return
 	}
 	defer conn.Close()
@@ -48,7 +48,7 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
 			conn.WriteTo(resp, src)
-			core.LogInfo("[LLMNR] Poisoned query for '%s' — responding with %s", name, ifaceIP)
+			core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
 		}
 	}
 }

@@ -14,7 +14,7 @@ import (
 func ServePOP3(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:110", ifaceIP))
 	if err != nil {
-		core.LogError("POP3 listen :110 — %v (need root?)", err)
+		core.LogError("POP3 listen :110 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("POP3 listening on %s:110", ifaceIP)

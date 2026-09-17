@@ -14,7 +14,7 @@ import (
 func ServeIMAP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:143", ifaceIP))
 	if err != nil {
-		core.LogError("IMAP listen :143 — %v (need root?)", err)
+		core.LogError("IMAP listen :143 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("IMAP listening on %s:143", ifaceIP)

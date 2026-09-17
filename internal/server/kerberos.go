@@ -25,7 +25,7 @@ func ServeKerberos(ifaceIP net.IP) {
 func serveKerberosUDP(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:88", ifaceIP))
 	if err != nil {
-		core.LogError("Kerberos UDP listen :88 — %v (need root?)", err)
+		core.LogError("Kerberos UDP listen :88 - %v (need root?)", err)
 		return
 	}
 	defer conn.Close()
@@ -110,7 +110,7 @@ func handleKerberosPacket(pkt []byte, src net.Addr) {
 	principal, realm, paData := parseKDCReq(appRaw.Bytes)
 
 	if principal != "" {
-		core.LogSuccess("[Kerberos] %s from %s — realm=%s principal=%s", msgType, src, realm, principal)
+		core.LogSuccess("[Kerberos] %s from %s - realm=%s principal=%s", msgType, src, realm, principal)
 	} else {
 		core.LogVerbose("Kerberos: %s from %s (could not extract principal)", msgType, src)
 	}

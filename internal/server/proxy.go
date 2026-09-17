@@ -14,7 +14,7 @@ import (
 func ServeProxy(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:3128", ifaceIP))
 	if err != nil {
-		core.LogError("Proxy listen :3128 — %v (need root?)", err)
+		core.LogError("Proxy listen :3128 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("Proxy listening on %s:3128 (HTTP NTLM proxy)", ifaceIP)
@@ -67,7 +67,7 @@ func HandleProxy(c net.Conn) {
 		proxyAuth := headers["proxy-authorization"]
 
 		if proxyAuth == "" || strings.ToUpper(proxyAuth) == "NTLM" {
-			core.LogVerbose("Proxy connection from %s — requesting NTLM auth", c.RemoteAddr())
+			core.LogVerbose("Proxy connection from %s - requesting NTLM auth", c.RemoteAddr())
 			sendProxyResponse(c, 407, "NTLM", nil)
 			continue
 		}
@@ -101,7 +101,7 @@ func HandleProxy(c net.Conn) {
 			challengeIssued = true
 			ntlmChal := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 			encoded := base64.StdEncoding.EncodeToString(ntlmChal)
-			core.LogVerbose("Proxy NTLM Type1 from %s — issuing challenge", c.RemoteAddr())
+			core.LogVerbose("Proxy NTLM Type1 from %s - issuing challenge", c.RemoteAddr())
 			sendProxyResponse(c, 407, "NTLM "+encoded, nil)
 
 		case 3:

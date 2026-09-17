@@ -11,7 +11,7 @@ import (
 func ServeDNS(ifaceIP net.IP) {
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf("%s:53", ifaceIP))
 	if err != nil {
-		core.LogError("DNS UDP listen :53 — %v (need root?)", err)
+		core.LogError("DNS UDP listen :53 - %v (need root?)", err)
 		return
 	}
 	core.LogInfo("DNS  listening on %s:53 (UDP+TCP)", ifaceIP)
@@ -84,7 +84,7 @@ func HandleDNSQuery(conn net.PacketConn, src net.Addr, pkt []byte, ip net.IP) {
 	resp := BuildDNSResponse(pkt, ip)
 	if resp != nil && conn != nil {
 		conn.WriteTo(resp, src)
-		core.LogInfo("[DNS] Poisoned query for '%s' — responding with %s", name, ip)
+		core.LogInfo("[DNS] Poisoned query for '%s' - responding with %s", name, ip)
 	}
 }
 
