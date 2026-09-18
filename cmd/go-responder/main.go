@@ -141,6 +141,7 @@ func main() {
 			}
 		}
 	}
+	core.RelayHasFixedTargets = len(relay.FixedTargets) > 0
 
 	core.RespondToIPs = core.ParseIPList(*respondTo)
 	core.DontRespondIPs = core.ParseIPList(*dontRespondTo)
