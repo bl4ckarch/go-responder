@@ -23,6 +23,17 @@ var (
 	Verbose       bool
 	OutFile       string
 	IfaceName     string
+
+	// SelectiveMode: when true, poisoners skip hosts with SMB signing=required
+	// (unless they are DCs), concentrating poisoning on relay-viable targets.
+	SelectiveMode bool
+
+	// RelayMode: when true, the SMB server attempts to relay NTLM auth to a
+	// target instead of only capturing the hash.
+	RelayMode bool
+
+	// RelayExecCmd is an optional shell command to execute after a successful relay.
+	RelayExecCmd string
 )
 
 func InitSession(challengeHex string) {

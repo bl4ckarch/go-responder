@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 
+	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
 )
 
@@ -32,11 +33,17 @@ func PoisonNBTNS(ifaceIP net.IP) {
 			continue
 		}
 		core.LogVerbose("NBT-NS query: '%s' from %s", name, src)
+		srcUDP := src.(*net.UDPAddr)
+		analyzer.Global.RegisterQuery(srcUDP.IP, name)
 		if core.AnalyzeMode {
 			core.LogInfo("[NBT-NS] [Analyze] query for '%s' from %s", name, src)
 			continue
 		}
 		if !core.ShouldRespond(src, name) {
+			continue
+		}
+		if !analyzer.Global.ShouldPoison(srcUDP.IP) {
+			core.LogVerbose("[NBT-NS] [Selective] skipping %s (signing=required)", srcUDP.IP)
 			continue
 		}
 		resp := BuildNBTNSResponse(pkt, ifaceIP)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
 )
 
@@ -38,11 +39,16 @@ func PoisonLLMNR(ifaceIP net.IP) {
 			continue
 		}
 		core.LogVerbose("LLMNR query: %s from %s", name, src)
+		analyzer.Global.RegisterQuery(src.IP, name)
 		if core.AnalyzeMode {
 			core.LogInfo("[LLMNR] [Analyze] query for '%s' from %s", name, src)
 			continue
 		}
 		if !core.ShouldRespond(src, name) {
+			continue
+		}
+		if !analyzer.Global.ShouldPoison(src.IP) {
+			core.LogVerbose("[LLMNR] [Selective] skipping %s (signing=required)", src.IP)
 			continue
 		}
 		resp := BuildLLMNRResponse(pkt, ifaceIP)

