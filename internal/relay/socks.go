@@ -279,9 +279,10 @@ func injectSession(client net.Conn, sess *RelaySession) {
 		return
 	}
 
-	// SMB1 multi-protocol NEGOTIATE → send SMB2 upgrade
+	// SMB1 multi-protocol NEGOTIATE → send SMB2 upgrade (clients expect msgID=0)
 	if isSMB1(first) {
-		if err := sendNB(client, buildSocksNegotiateResp(0)); err != nil {
+		realResp := targetNegotiateResp(sess.TargetIP, 0)
+		if err := sendNB(client, realResp); err != nil {
 			return
 		}
 		first, err = recvNB(client)
@@ -295,10 +296,12 @@ func injectSession(client net.Conn, sess *RelaySession) {
 	}
 	cmd := binary.LittleEndian.Uint16(first[12:14])
 
-	// SMB2 NEGOTIATE → respond with capabilities, read next
+	// SMB2 NEGOTIATE → relay target's real response so the client sees the
+	// correct machine name, domain, capabilities and signing policy.
 	if cmd == 0x0000 {
 		negMsgID := binary.LittleEndian.Uint64(first[24:32])
-		if err := sendNB(client, buildSocksNegotiateResp(negMsgID)); err != nil {
+		realResp := targetNegotiateResp(sess.TargetIP, negMsgID)
+		if err := sendNB(client, realResp); err != nil {
 			return
 		}
 		first, err = recvNB(client)
@@ -454,4 +457,32 @@ func buildSocksSuccess(msgID, sessionID uint64) []byte {
 func buildLogoffResp(msgID uint64) []byte {
 	hdr := smb2RespHdr(0x0002, msgID, smb2StatusSuccess, 0)
 	return append(hdr, 0x04, 0x00) // StructureSize = 4
+}
+
+// targetNegotiateResp opens a short-lived probe connection to the target,
+// fetches its real SMB2 NEGOTIATE response (which carries the true machine
+// name, domain, server GUID, capabilities and signing policy), patches the
+// MessageId to match the client's request, and returns it.
+//
+// If the probe fails for any reason we fall back to our own fake response so
+// the SOCKS session can still proceed — clients will just see a generic name.
+func targetNegotiateResp(targetIP net.IP, clientMsgID uint64) []byte {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP.String(), "445"), 3*time.Second)
+	if err != nil {
+		return buildSocksNegotiateResp(clientMsgID)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	probe := &smbConn{conn: conn}
+	resp, err := probe.negotiate()
+	if err != nil || len(resp) < 64 {
+		return buildSocksNegotiateResp(clientMsgID)
+	}
+
+	// The server response has SMB2_FLAGS_SERVER_TO_REDIR set and the real
+	// SecurityMode.  Just fix up the MessageId so the client's sequence check
+	// passes.
+	binary.LittleEndian.PutUint64(resp[24:32], clientMsgID)
+	return resp
 }
