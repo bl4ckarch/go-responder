@@ -128,12 +128,12 @@ func HandleLDAP(c net.Conn) {
 				core.LogVerbose("LDAP NTLM Type1 from %s - issuing challenge", c.RemoteAddr())
 
 			case 3:
-				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 				if err != nil {
 					core.LogVerbose("LDAP NTLM parse: %v", err)
 					return
 				}
-				core.LogSuccess("[LDAP] NTLMv2 captured from %s", c.RemoteAddr())
+				core.LogSuccess("[LDAP] %s captured from %s", ntlmVer, c.RemoteAddr())
 				core.LogSuccess("       %s\\%s", domain, user)
 				core.LogSuccess("       %s", hash)
 				core.SaveHash(hash)

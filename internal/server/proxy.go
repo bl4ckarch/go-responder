@@ -109,13 +109,13 @@ func HandleProxy(c net.Conn) {
 				sendProxyResponse(c, 407, "NTLM", nil)
 				return
 			}
-			hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+			hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 			if err != nil {
 				core.LogVerbose("Proxy NTLM parse: %v", err)
 				sendProxyResponse(c, 407, "NTLM", nil)
 				return
 			}
-			core.LogSuccess("[Proxy] NTLMv2 captured from %s", c.RemoteAddr())
+			core.LogSuccess("[Proxy] %s captured from %s", ntlmVer, c.RemoteAddr())
 			core.LogSuccess("        %s\\%s", domain, user)
 			core.LogSuccess("        %s", hash)
 			core.SaveHash(hash)

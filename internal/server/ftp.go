@@ -99,9 +99,9 @@ func HandleFTP(c net.Conn) {
 				send("530 Authentication failed")
 				return
 			}
-			hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
+			hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 			if err == nil {
-				core.LogSuccess("[FTP] NTLMv2 captured from %s", c.RemoteAddr())
+				core.LogSuccess("[FTP] %s captured from %s", ntlmVer, c.RemoteAddr())
 				core.LogSuccess("      %s\\%s", domain, user)
 				core.LogSuccess("      %s", hash)
 				core.SaveHash(hash)

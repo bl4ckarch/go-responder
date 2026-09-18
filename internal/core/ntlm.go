@@ -123,16 +123,17 @@ func BuildNTLMChallenge(challenge [8]byte, domain, computer string) []byte {
 
 // ParseNTLMAuthenticate parses a Type3 NTLM message and returns the hash string.
 // NTLMv2 format: USER::DOMAIN:CHALLENGE:NTProofStr:blob  (hashcat -m 5600)
-// NTLMv1 format: USER::DOMAIN:LMResp:NTResp:CHALLENGE    (hashcat -m 5500)
-func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, domain string, err error) {
+// NTLMv1/ESS format: USER::DOMAIN:LMResp:NTResp:CHALLENGE (hashcat -m 5500)
+// version is "NTLMv1" when ntData is exactly 24 bytes, "NTLMv2" otherwise.
+func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, domain, version string, err error) {
 	if len(data) < 12 || !strings.HasPrefix(string(data), NTLMSSPSig) {
-		return "", "", "", fmt.Errorf("not NTLMSSP")
+		return "", "", "", "", fmt.Errorf("not NTLMSSP")
 	}
 	if binary.LittleEndian.Uint32(data[8:12]) != 3 {
-		return "", "", "", fmt.Errorf("not type 3")
+		return "", "", "", "", fmt.Errorf("not type 3")
 	}
 	if len(data) < 52 {
-		return "", "", "", fmt.Errorf("too short")
+		return "", "", "", "", fmt.Errorf("too short")
 	}
 	field := func(off int) []byte {
 		if off+8 > len(data) {
@@ -151,6 +152,7 @@ func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, doma
 	domain = DecodeUTF16LE(field(28))
 
 	if len(ntData) == 24 {
+		version = "NTLMv1"
 		hash = fmt.Sprintf("%s::%s:%s:%s:%s",
 			username, domain,
 			hex.EncodeToString(lmData),
@@ -158,15 +160,16 @@ func ParseNTLMAuthenticate(data []byte, challenge [8]byte) (hash, username, doma
 			hex.EncodeToString(challenge[:]))
 	} else {
 		if len(ntData) < 16 {
-			return "", "", "", fmt.Errorf("NtChallengeResponse too short")
+			return "", "", "", "", fmt.Errorf("NtChallengeResponse too short")
 		}
+		version = "NTLMv2"
 		hash = fmt.Sprintf("%s::%s:%s:%s:%s",
 			username, domain,
 			hex.EncodeToString(challenge[:]),
 			hex.EncodeToString(ntData[:16]),
 			hex.EncodeToString(ntData[16:]))
 	}
-	return hash, username, domain, nil
+	return hash, username, domain, version, nil
 }
 
 // ParseNTLMNegotiate extracts workstation, domain, and OS version from a Type1 message.

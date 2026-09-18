@@ -83,9 +83,9 @@ func HandleMSSQL(c net.Conn) {
 				c.Write(wrapTDS(tdsSSPI, ntlmChallenge))
 
 			case 3:
-				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 				if err == nil {
-					core.LogSuccess("[MSSQL] NTLMv2 captured from %s", c.RemoteAddr())
+					core.LogSuccess("[MSSQL] %s captured from %s", ntlmVer, c.RemoteAddr())
 					core.LogSuccess("        %s\\%s", domain, user)
 					core.LogSuccess("        %s", hash)
 					core.SaveHash(hash)
