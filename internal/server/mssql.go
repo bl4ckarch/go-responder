@@ -85,10 +85,7 @@ func HandleMSSQL(c net.Conn) {
 			case 3:
 				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 				if err == nil {
-					core.LogSuccess("[MSSQL] %s captured from %s", ntlmVer, c.RemoteAddr())
-					core.LogSuccess("        %s\\%s", domain, user)
-					core.LogSuccess("        %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("MSSQL", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 				}
 				c.Write(buildTDSError("Login failed for user."))
 				return

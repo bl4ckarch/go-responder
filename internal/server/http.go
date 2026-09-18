@@ -73,7 +73,16 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(strings.ToUpper(auth), "BASIC ") {
 		decoded, err := base64.StdEncoding.DecodeString(auth[6:])
 		if err == nil {
-			core.LogSuccess("[HTTP] Basic auth cleartext from %s: %s", r.RemoteAddr, string(decoded))
+			parts := strings.SplitN(string(decoded), ":", 2)
+			user, pass := parts[0], ""
+			if len(parts) == 2 {
+				pass = parts[1]
+			}
+			dom := ""
+			if i := strings.Index(user, "\\"); i >= 0 {
+				dom, user = user[:i], user[i+1:]
+			}
+			core.SaveCleartext("HTTP", r.RemoteAddr, user, dom, pass)
 		}
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
@@ -129,10 +138,7 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(401)
 			return
 		}
-		core.LogSuccess("[HTTP] %s captured from %s", ntlmVer, r.RemoteAddr)
-		core.LogSuccess("       %s\\%s", domain, user)
-		core.LogSuccess("       %s", hash)
-		core.SaveHash(hash)
+		core.SaveCapture("HTTP", r.RemoteAddr, user, domain, ntlmVer, hash)
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
 

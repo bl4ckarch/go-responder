@@ -93,10 +93,7 @@ func HandleSMTP(c net.Conn) {
 			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
 				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					core.LogSuccess("[SMTP] %s captured from %s", ntlmVer, c.RemoteAddr())
-					core.LogSuccess("       %s\\%s", domain, user)
-					core.LogSuccess("       %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("SMTP", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 				}
 			}
 			send("535 5.7.8 Authentication credentials invalid")

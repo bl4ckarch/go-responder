@@ -123,10 +123,7 @@ func HandleDCERPC(c net.Conn) {
 				core.LogVerbose("DCE-RPC NTLM parse: %v", err)
 				return
 			}
-			core.LogSuccess("[DCE-RPC] %s captured from %s", ntlmVer, c.RemoteAddr())
-			core.LogSuccess("          %s\\%s", domain, user)
-			core.LogSuccess("          %s", hash)
-			core.SaveHash(hash)
+			core.SaveCapture("DCE-RPC", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 			return
 
 		case rpcPTYPERequest:

