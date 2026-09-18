@@ -3,6 +3,7 @@ package poisoner
 import (
 	"net"
 
+	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
 )
 
@@ -36,11 +37,16 @@ func PoisonMDNS(ifaceIP net.IP) {
 			continue
 		}
 		core.LogVerbose("mDNS  query: %s from %s", name, src)
+		analyzer.Global.RegisterQuery(src.IP, name)
 		if core.AnalyzeMode {
 			core.LogInfo("[mDNS] [Analyze] query for '%s' from %s", name, src)
 			continue
 		}
 		if !core.ShouldRespond(src, name) {
+			continue
+		}
+		if !analyzer.Global.ShouldPoison(src.IP) {
+			core.LogVerbose("[mDNS] [Selective] skipping %s (signing=required)", src.IP)
 			continue
 		}
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
