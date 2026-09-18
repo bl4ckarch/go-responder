@@ -104,11 +104,11 @@ func HandleSMB(conn net.Conn) {
 					if !challengeIssued {
 						return
 					}
-					hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+					hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 					if err != nil {
 						return
 					}
-					core.LogSuccess("[SMB] NTLMv2 captured from %s", conn.RemoteAddr())
+					core.LogSuccess("[SMB] %s captured from %s", ntlmVer, conn.RemoteAddr())
 					core.LogSuccess("      %s\\%s", domain, user)
 					core.LogSuccess("      %s", hash)
 					core.SaveHash(hash)
@@ -147,11 +147,11 @@ func HandleSMB(conn net.Conn) {
 					if !challengeIssued {
 						return
 					}
-					hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+					hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 					if err != nil {
 						return
 					}
-					core.LogSuccess("[SMB] NTLMv2 captured from %s", conn.RemoteAddr())
+					core.LogSuccess("[SMB] %s captured from %s", ntlmVer, conn.RemoteAddr())
 					core.LogSuccess("      %s\\%s", domain, user)
 					core.LogSuccess("      %s", hash)
 					core.SaveHash(hash)

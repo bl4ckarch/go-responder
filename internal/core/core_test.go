@@ -324,12 +324,15 @@ func TestParseNTLMAuthenticate_NTLMv2(t *testing.T) {
 	blob := make([]byte, 28)
 	ntResp := append(ntProofStr, blob...)
 	msg := buildType3("DOMAIN", "user", lmResp, ntResp)
-	hash, user, domain, err := ParseNTLMAuthenticate(msg, challenge)
+	hash, user, domain, ver, err := ParseNTLMAuthenticate(msg, challenge)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if user != "user" || domain != "DOMAIN" {
 		t.Fatalf("got user=%s domain=%s", user, domain)
+	}
+	if ver != "NTLMv2" {
+		t.Fatalf("expected NTLMv2, got %s", ver)
 	}
 	parts := strings.Split(hash, ":")
 	if len(parts) < 5 {
@@ -346,12 +349,15 @@ func TestParseNTLMAuthenticate_NTLMv1(t *testing.T) {
 	lmResp := make([]byte, 24)
 	ntResp := make([]byte, 24)
 	msg := buildType3("CORP", "alice", lmResp, ntResp)
-	hash, user, domain, err := ParseNTLMAuthenticate(msg, challenge)
+	hash, user, domain, ver, err := ParseNTLMAuthenticate(msg, challenge)
 	if err != nil {
 		t.Fatalf("NTLMv1 parse error: %v", err)
 	}
 	if user != "alice" || domain != "CORP" {
 		t.Fatalf("got user=%s domain=%s", user, domain)
+	}
+	if ver != "NTLMv1" {
+		t.Fatalf("expected NTLMv1, got %s", ver)
 	}
 	if !strings.HasPrefix(hash, "alice::CORP:") {
 		t.Fatalf("bad NTLMv1 hash format: %s", hash)
@@ -363,23 +369,23 @@ func TestParseNTLMAuthenticate_NTLMv1(t *testing.T) {
 
 func TestParseNTLMAuthenticate_Errors(t *testing.T) {
 	challenge := GetChallenge()
-	_, _, _, err := ParseNTLMAuthenticate([]byte("GARBAGE"), challenge)
+	_, _, _, _, err := ParseNTLMAuthenticate([]byte("GARBAGE"), challenge)
 	if err == nil {
 		t.Fatal("expected error for garbage input")
 	}
 	msg := buildType1(0x00000001, "", "")
-	_, _, _, err = ParseNTLMAuthenticate(msg, challenge)
+	_, _, _, _, err = ParseNTLMAuthenticate(msg, challenge)
 	if err == nil {
 		t.Fatal("expected error for type 1 message")
 	}
-	_, _, _, err = ParseNTLMAuthenticate([]byte("NTLMSSP\x00\x03\x00\x00\x00"), challenge)
+	_, _, _, _, err = ParseNTLMAuthenticate([]byte("NTLMSSP\x00\x03\x00\x00\x00"), challenge)
 	if err == nil {
 		t.Fatal("expected error for too-short type 3")
 	}
 	lm := make([]byte, 4)
 	nt := make([]byte, 8)
 	msg2 := buildType3("D", "u", lm, nt)
-	_, _, _, err = ParseNTLMAuthenticate(msg2, challenge)
+	_, _, _, _, err = ParseNTLMAuthenticate(msg2, challenge)
 	if err == nil {
 		t.Fatal("expected error for too-short NtResponse")
 	}

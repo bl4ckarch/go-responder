@@ -118,12 +118,12 @@ func HandleDCERPC(c net.Conn) {
 			if binary.LittleEndian.Uint32(ntlm[8:12]) != 3 {
 				return
 			}
-			hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+			hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 			if err != nil {
 				core.LogVerbose("DCE-RPC NTLM parse: %v", err)
 				return
 			}
-			core.LogSuccess("[DCE-RPC] NTLMv2 captured from %s", c.RemoteAddr())
+			core.LogSuccess("[DCE-RPC] %s captured from %s", ntlmVer, c.RemoteAddr())
 			core.LogSuccess("          %s\\%s", domain, user)
 			core.LogSuccess("          %s", hash)
 			core.SaveHash(hash)

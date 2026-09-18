@@ -123,17 +123,13 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 		challenge := val.([8]byte)
 		connChallenges.Delete(r.RemoteAddr)
 
-		hash, user, domain, err := core.ParseNTLMAuthenticate(ntlm, challenge)
+		hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 		if err != nil {
 			core.LogVerbose("HTTP NTLM parse: %v", err)
 			w.WriteHeader(401)
 			return
 		}
-		proto := "NTLMv2"
-		if core.LMMode {
-			proto = "NTLMv1"
-		}
-		core.LogSuccess("[HTTP] %s captured from %s", proto, r.RemoteAddr)
+		core.LogSuccess("[HTTP] %s captured from %s", ntlmVer, r.RemoteAddr)
 		core.LogSuccess("       %s\\%s", domain, user)
 		core.LogSuccess("       %s", hash)
 		core.SaveHash(hash)
