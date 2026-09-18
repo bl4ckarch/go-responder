@@ -12,6 +12,7 @@ import (
 
 	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
+	"go-responder/internal/db"
 	"go-responder/internal/lnkgen"
 	"go-responder/internal/poisoner"
 	"go-responder/internal/relay"
@@ -39,6 +40,8 @@ func main() {
 	flag.StringVar(&core.OutFile, "o", "hashes.txt", "Output file for captured hashes")
 	challenge := flag.String("c", "", "Fixed NTLM challenge (hex). Random if not set.")
 	analyze := flag.Bool("A", false, "Analyze mode: log queries but do not poison")
+
+	dbPath := flag.String("db", "hashes.db", "Persistent credential database (JSON). Skips already-captured accounts.")
 
 	noSMB := flag.Bool("no-smb", false, "Disable SMB server")
 	noHTTP := flag.Bool("no-http", false, "Disable HTTP server")
@@ -148,8 +151,15 @@ func main() {
 	core.RespondToNames = core.ParseNameList(*respondToName)
 	core.DontRespondNames = core.ParseNameList(*dontRespondToName)
 
+	hashDB, err := db.Open(*dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Cannot open credential DB %s: %v\n", *dbPath, err)
+		os.Exit(1)
+	}
+	core.HashDB = hashDB
+
 	fmt.Print(banner)
-	printStartup(ip, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy)
+	printStartup(ip, *dbPath, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy)
 
 	go poisoner.PoisonLLMNR(ip)
 	go poisoner.PoisonNBTNS(ip)
@@ -218,10 +228,10 @@ func main() {
 	if core.AnalyzeMode || core.SelectiveMode || core.RelayMode {
 		analyzer.Global.PrintMap()
 	}
-	fmt.Printf("\n[*] Shutting down. Hashes saved to %s\n", core.OutFile)
+	printShutdown(hashDB)
 }
 
-func printStartup(ip interface{}, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy bool) {
+func printStartup(ip interface{}, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy bool) {
 	on := func(disabled bool) string {
 		if disabled {
 			return core.CRed + "OFF" + core.CReset
@@ -289,5 +299,30 @@ func printStartup(ip interface{}, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3,
 	fmt.Printf("    Responder Domain Name      [%s]\n", core.SessionDomain)
 	fmt.Printf("    Responder DCE-RPC Port     [%d]\n", core.SessionDCERPCPort)
 	fmt.Printf("    Output file                [%s]\n", core.OutFile)
+	knownCount := 0
+	if core.HashDB != nil {
+		knownCount = core.HashDB.UniqueUsers()
+	}
+	fmt.Printf("    Credential DB              [%s]", dbPath)
+	if knownCount > 0 {
+		fmt.Printf("  %s%d account(s) already known%s", core.CYellow, knownCount, core.CReset)
+	} else {
+		fmt.Printf("  %s(empty)%s", core.CDim, core.CReset)
+	}
 	fmt.Println()
+	fmt.Println()
+}
+
+func printShutdown(hashDB *db.DB) {
+	sep := strings.Repeat("─", 60)
+	fmt.Printf("\n%s%s%s\n", core.CDim, sep, core.CReset)
+	fmt.Printf("%s[*]%s Session complete\n", core.CCyan, core.CReset)
+	if hashDB != nil {
+		total := hashDB.Count()
+		unique := hashDB.UniqueUsers()
+		fmt.Printf("    %sCaptures (total) :%s %d\n", core.CDim, core.CReset, total)
+		fmt.Printf("    %sUnique accounts  :%s %d\n", core.CDim, core.CReset, unique)
+	}
+	fmt.Printf("    %sHashes (hashcat) :%s %s\n", core.CDim, core.CReset, core.OutFile)
+	fmt.Printf("%s%s%s\n\n", core.CDim, sep, core.CReset)
 }

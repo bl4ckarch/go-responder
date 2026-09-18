@@ -141,10 +141,7 @@ func HandleSMB(conn net.Conn) {
 					if err != nil {
 						return
 					}
-					core.LogSuccess("[SMB] %s captured from %s", ntlmVer, conn.RemoteAddr())
-					core.LogSuccess("      %s\\%s", domain, user)
-					core.LogSuccess("      %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("SMB", conn.RemoteAddr().String(), user, domain, ntlmVer, hash)
 					sendNB(conn, smb1SessionSetupResp(msg, statusLogonFailure, nil))
 					return
 				}
@@ -186,10 +183,7 @@ func HandleSMB(conn net.Conn) {
 					if err != nil {
 						return
 					}
-					core.LogSuccess("[SMB] %s captured from %s", ntlmVer, conn.RemoteAddr())
-					core.LogSuccess("      %s\\%s", domain, user)
-					core.LogSuccess("      %s", hash)
-					core.SaveHash(hash)
+					core.SaveCapture("SMB", conn.RemoteAddr().String(), user, domain, ntlmVer, hash)
 					sendNB(conn, smb2Error(smb2CmdSessionSetup, msgID, statusLogonFailure))
 					return
 				}

