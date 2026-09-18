@@ -252,3 +252,12 @@ func WrapSPNEGOChallenge(ntlmChallenge []byte) []byte {
 	inner = append(inner, responseToken...)
 	return DerTag(0xa1, DerTag(0x30, inner))
 }
+
+// WrapSPNEGOSuccess builds a SPNEGO NegTokenResp with NegState=accept-completed.
+// This tells the client that authentication is finished — without it, impacket
+// interprets the empty security buffer in our SESSION_SETUP SUCCESS as an
+// incomplete auth exchange and sends another SESSION_SETUP.
+func WrapSPNEGOSuccess() []byte {
+	negState := DerTag(0xa0, []byte{0x0a, 0x01, 0x00}) // accept-completed = 0x00
+	return DerTag(0xa1, DerTag(0x30, negState))
+}

