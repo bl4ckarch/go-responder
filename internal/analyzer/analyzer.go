@@ -125,6 +125,11 @@ func (nm *NetworkMap) ShouldPoison(ip net.IP) bool {
 	if !core.SelectiveMode {
 		return true
 	}
+	// With a fixed relay target any host is a potential victim regardless of
+	// its own signing posture — we relay its auth to the fixed destination.
+	if core.RelayMode && core.RelayHasFixedTargets {
+		return true
+	}
 	key := ip.String()
 	nm.mu.RLock()
 	h, ok := nm.hosts[key]
@@ -137,8 +142,8 @@ func (nm *NetworkMap) ShouldPoison(ip net.IP) bool {
 	if !h.SigningProbed {
 		return true // not yet probed — still worth poisoning
 	}
-	// In selective mode: skip hosts with signing=required unless they are DCs
-	// (DCs are high value even if we can only capture, not relay).
+	// In selective mode without a fixed relay target: skip signing=required hosts
+	// unless they are DCs (high value for capture even without relay).
 	return h.Signing != SigningRequired || h.IsDC
 }
 
