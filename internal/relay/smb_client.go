@@ -53,6 +53,19 @@ func (c *smbConn) nextMsgID() uint64 {
 	return id
 }
 
+// consumeMsgIDs returns the next available MessageID and advances the counter
+// by creditCharge (treating 0 as 1, per SMB2 spec).  Use this in the SOCKS
+// proxy loop so that large-CreditCharge requests (e.g. READ with 16 credits)
+// keep the relay session's msgID window in sync with what the server expects.
+func (c *smbConn) consumeMsgIDs(creditCharge uint16) uint64 {
+	if creditCharge < 1 {
+		creditCharge = 1
+	}
+	id := c.msgID
+	c.msgID += uint64(creditCharge)
+	return id
+}
+
 // negotiate sends an SMB2 NEGOTIATE and returns the response or an error.
 func (c *smbConn) negotiate() ([]byte, error) {
 	if err := c.send(buildNegotiateReq(c.nextMsgID())); err != nil {
