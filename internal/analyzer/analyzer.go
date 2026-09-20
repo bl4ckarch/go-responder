@@ -16,9 +16,9 @@ type SigningStatus int
 
 const (
 	SigningUnknown     SigningStatus = iota
-	SigningNotRequired              // no signing at all  — relay target
-	SigningEnabled                  // supported but not required — relay target
-	SigningRequired                 // required — relay blocked
+	SigningNotRequired              // no signing at all
+	SigningEnabled                  // supported but not required
+	SigningRequired                 // required
 )
 
 func (s SigningStatus) String() string {
@@ -48,13 +48,6 @@ type HostInfo struct {
 	FirstSeen     time.Time
 	LastSeen      time.Time
 	mu            sync.Mutex
-}
-
-// IsRelayTarget reports whether this host can be used as an SMB relay target.
-func (h *HostInfo) IsRelayTarget() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.SigningProbed && h.Signing != SigningRequired
 }
 
 // NetworkMap is the thread-safe in-memory network fingerprint store.
@@ -125,11 +118,6 @@ func (nm *NetworkMap) ShouldPoison(ip net.IP) bool {
 	if !core.SelectiveMode {
 		return true
 	}
-	// With a fixed relay target any host is a potential victim regardless of
-	// its own signing posture — we relay its auth to the fixed destination.
-	if core.RelayMode && core.RelayHasFixedTargets {
-		return true
-	}
 	key := ip.String()
 	nm.mu.RLock()
 	h, ok := nm.hosts[key]
@@ -142,46 +130,9 @@ func (nm *NetworkMap) ShouldPoison(ip net.IP) bool {
 	if !h.SigningProbed {
 		return true // not yet probed — still worth poisoning
 	}
-	// In selective mode without a fixed relay target: skip signing=required hosts
-	// unless they are DCs (high value for capture even without relay).
+	// In selective mode: skip signing=required hosts unless they are DCs
+	// (high value for capture).
 	return h.Signing != SigningRequired || h.IsDC
-}
-
-// BestRelayTarget returns the highest-scored host suitable for NTLM relay,
-// excluding skipIP (the victim — we never relay back to the attacker).
-// Returns nil when no relay target is known yet.
-func (nm *NetworkMap) BestRelayTarget(skipIP net.IP) net.IP {
-	nm.mu.RLock()
-	defer nm.mu.RUnlock()
-	var best *HostInfo
-	for _, h := range nm.hosts {
-		if skipIP != nil && h.IP.Equal(skipIP) {
-			continue
-		}
-		if !h.IsRelayTarget() {
-			continue
-		}
-		if best == nil || scoreHost(h) > scoreHost(best) {
-			best = h
-		}
-	}
-	if best == nil {
-		return nil
-	}
-	return best.IP
-}
-
-// RelayTargets returns every IP currently classified as a relay target.
-func (nm *NetworkMap) RelayTargets() []net.IP {
-	nm.mu.RLock()
-	defer nm.mu.RUnlock()
-	var out []net.IP
-	for _, h := range nm.hosts {
-		if h.IsRelayTarget() {
-			out = append(out, h.IP)
-		}
-	}
-	return out
 }
 
 // probeSigningOnce probes SMB signing on ip at most once, skipping concurrent
@@ -211,12 +162,8 @@ func (nm *NetworkMap) probeSigningOnce(ip net.IP) {
 	h.mu.Lock()
 	h.Signing = signing
 	h.SigningProbed = true
-	relayTag := ""
-	if signing != SigningRequired {
-		relayTag = " <<< RELAY TARGET"
-	}
 	h.mu.Unlock()
-	core.LogInfo("[Analyzer] %s SMB signing=%s%s", ip, signing, relayTag)
+	core.LogInfo("[Analyzer] %s SMB signing=%s", ip, signing)
 }
 
 // RankedHosts returns all discovered hosts sorted by attack value, highest first.
@@ -269,9 +216,9 @@ func scoreHost(h *HostInfo) int {
 	score := 0
 	switch h.Signing {
 	case SigningNotRequired:
-		score += 300 // best relay target
+		score += 300
 	case SigningEnabled:
-		score += 200 // relay target
+		score += 200
 	}
 	if h.IsDC {
 		score += 100

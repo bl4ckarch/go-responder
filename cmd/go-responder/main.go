@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"go-responder/internal/db"
 	"go-responder/internal/lnkgen"
 	"go-responder/internal/poisoner"
-	"go-responder/internal/relay"
 	"go-responder/internal/server"
 )
 
@@ -60,11 +58,7 @@ func main() {
 
 	lm := flag.Bool("lm", false, "Force NTLMv1 by removing Extended Session Security flag (hashcat -m 5500)")
 
-	selective := flag.Bool("selective", false, "Selective poisoning: only poison hosts where SMB signing is not required (relay targets)")
-	relayMode := flag.Bool("relay", false, "Enable NTLM relay: forward auth to a target instead of only capturing")
-	relayTo := flag.String("relay-to", "", "Comma-separated relay target IPs (auto-select from network map when empty)")
-	relayCmd := flag.String("relay-cmd", "", "Shell command to execute on successful relay (experimental)")
-	socksPort := flag.Int("socks-port", 1080, "SOCKS5 proxy port for authenticated relay sessions (0 = disabled)")
+	selective := flag.Bool("selective", false, "Selective poisoning: only poison hosts where SMB signing is not required")
 
 	wpad := flag.Bool("wpad", false, "Enable WPAD PAC file serving from HTTP server")
 	wpadProxy := flag.String("wpad-proxy", "", "Proxy host:port to advertise in WPAD PAC file (default: self:3128)")
@@ -131,22 +125,6 @@ func main() {
 	core.WPADEnabled = *wpad
 	core.WPADProxyHost = *wpadProxy
 	core.SelectiveMode = *selective
-	core.RelayMode = *relayMode
-	core.RelayExecCmd = *relayCmd
-	relay.ExecCmd = *relayCmd
-	relay.SocksPort = *socksPort
-
-	if *relayTo != "" {
-		for _, raw := range strings.Split(*relayTo, ",") {
-			raw = strings.TrimSpace(raw)
-			if ip := net.ParseIP(raw); ip != nil {
-				relay.FixedTargets = append(relay.FixedTargets, ip)
-			} else {
-				fmt.Fprintf(os.Stderr, "[-] invalid relay target IP: %s\n", raw)
-			}
-		}
-	}
-	core.RelayHasFixedTargets = len(relay.FixedTargets) > 0
 
 	core.RespondToIPs = core.ParseIPList(*respondTo)
 	core.DontRespondIPs = core.ParseIPList(*dontRespondTo)
@@ -161,7 +139,7 @@ func main() {
 	core.HashDB = hashDB
 
 	fmt.Print(banner)
-	printStartup(ip, *dbPath, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy)
+	printStartup(ip, *dbPath, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy, *selective)
 
 	go poisoner.PoisonLLMNR(ip)
 	go poisoner.PoisonNBTNS(ip)
@@ -210,15 +188,11 @@ func main() {
 		go server.ServeProxy(ip)
 	}
 
-	if core.RelayMode && *socksPort > 0 {
-		go relay.ServeSocks(ip, *socksPort)
-	}
-
 	fmt.Println("[+] Listening for events...")
 	fmt.Println()
 
 	// Periodically print the network map when analyze or selective mode is active.
-	if core.AnalyzeMode || core.SelectiveMode || core.RelayMode {
+	if core.AnalyzeMode || core.SelectiveMode {
 		go func() {
 			ticker := time.NewTicker(2 * time.Minute)
 			defer ticker.Stop()
@@ -231,16 +205,13 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	if core.AnalyzeMode || core.SelectiveMode || core.RelayMode {
+	if core.AnalyzeMode || core.SelectiveMode {
 		analyzer.Global.PrintMap()
-	}
-	if core.RelayMode && *socksPort > 0 {
-		relay.Pool.PrintPool(ip)
 	}
 	printShutdown(hashDB)
 }
 
-func printStartup(ip interface{}, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy bool) {
+func printStartup(ip interface{}, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy, selective bool) {
 	on := func(disabled bool) string {
 		if disabled {
 			return core.CRed + "OFF" + core.CReset
@@ -277,17 +248,7 @@ func printStartup(ip interface{}, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, 
 	fmt.Printf("    Challenge set              [%s]\n", core.ChallengeHexStr())
 	fmt.Printf("    LM downgrade               [%v]\n", core.LMMode)
 	fmt.Printf("    Analyze mode               [%v]\n", core.AnalyzeMode)
-	fmt.Printf("    Selective poisoning        [%v]\n", core.SelectiveMode)
-	fmt.Printf("    Relay mode                 [%v]\n", core.RelayMode)
-	if core.RelayMode && len(relay.FixedTargets) > 0 {
-		fmt.Printf("    Relay targets              %v\n", relay.FixedTargets)
-	}
-	if core.RelayMode && relay.SocksPort > 0 {
-		fmt.Printf("    SOCKS5 proxy               [%s:%d]  (proxychains)\n", ip, relay.SocksPort)
-	}
-	if core.RelayExecCmd != "" {
-		fmt.Printf("    Relay exec cmd             [%s]\n", core.RelayExecCmd)
-	}
+	fmt.Printf("    Selective poisoning        [%v]\n", selective)
 	if core.WPADEnabled {
 		fmt.Printf("    WPAD                       [ON - proxy %s]\n", core.WPADProxyHost)
 	}
