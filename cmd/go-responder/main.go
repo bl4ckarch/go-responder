@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -89,14 +90,23 @@ func main() {
 		*dontRespondToName = v
 	}
 
-	if *lnkgenDir != "" {
+	resolveIface := func() (net.IP, error) {
 		if *iface == "" {
-			fmt.Fprintln(os.Stderr, "[-] -i <interface> required for --lnkgen")
-			os.Exit(1)
+			name, ip, err := core.GetDefaultIface()
+			if err != nil {
+				return nil, fmt.Errorf("no network interface found (use -i to specify one): %w", err)
+			}
+			fmt.Printf("[*] No interface specified, using %s (%s)\n", name, ip)
+			*iface = name
+			return ip, nil
 		}
-		ip, err := core.GetIfaceIP(*iface)
+		return core.GetIfaceIP(*iface)
+	}
+
+	if *lnkgenDir != "" {
+		ip, err := resolveIface()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[-] Cannot get IP for interface %s: %v\n", *iface, err)
+			fmt.Fprintf(os.Stderr, "[-] %v\n", err)
 			os.Exit(1)
 		}
 		if err := lnkgen.GenerateTriggerFiles(ip, *lnkgenDir); err != nil {
@@ -106,15 +116,10 @@ func main() {
 		return
 	}
 
-	if *iface == "" {
-		fmt.Fprintln(os.Stderr, "[-] -i <interface> is required")
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	ip, err := core.GetIfaceIP(*iface)
+	ip, err := resolveIface()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Cannot get IP for interface %s: %v\n", *iface, err)
+		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
+		flag.Usage()
 		os.Exit(1)
 	}
 

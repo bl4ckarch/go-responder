@@ -78,6 +78,36 @@ func GenPort() int {
 	return int(n.Int64()) + 20000
 }
 
+// GetDefaultIface returns the name and IPv4 of the first non-loopback, up interface.
+func GetDefaultIface() (string, net.IP, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", nil, err
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				return iface.Name, ip4, nil
+			}
+		}
+	}
+	return "", nil, fmt.Errorf("no suitable network interface found")
+}
+
 // GetIfaceLinkLocal returns the link-local IPv6 address of the named interface.
 func GetIfaceLinkLocal(name string) (net.IP, error) {
 	iface, err := net.InterfaceByName(name)
