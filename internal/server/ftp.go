@@ -111,8 +111,8 @@ func HandleFTP(c net.Conn) {
 			ftpUser = strings.TrimSpace(line[5:])
 			send("331 Password required")
 		} else if strings.HasPrefix(upper, "PASS ") {
-			pass := strings.TrimPrefix(line, "PASS ")
-			pass = strings.TrimPrefix(pass, "pass ")
+			// line[5:] is the password whatever the case of the verb.
+			pass := strings.TrimSpace(line[5:])
 			if pass != "" {
 				core.SaveCleartext("FTP", c.RemoteAddr().String(), ftpUser, "", pass)
 			}

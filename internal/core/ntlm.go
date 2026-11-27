@@ -72,6 +72,15 @@ func DecodeUTF16LE(b []byte) string {
 	return string(utf16.Decode(u16))
 }
 
+// FileTime converts t to a Windows FILETIME: the number of 100 ns intervals
+// since 1601-01-01 UTC.  It must not be computed with time.Since(epoch) —
+// the 1601..1970 span is ~369 years, which overflows time.Duration (int64 ns,
+// saturating at ~292 years) and would return a constant, bogus timestamp.
+func FileTime(t time.Time) uint64 {
+	const epochDelta = uint64(116444736000000000) // 100 ns ticks between 1601 and 1970
+	return uint64(t.UnixNano()/100) + epochDelta
+}
+
 func buildTargetInfo(domain, computer string) []byte {
 	var b bytes.Buffer
 	avp := func(id uint16, val []byte) {
@@ -83,10 +92,8 @@ func buildTargetInfo(domain, computer string) []byte {
 	avp(0x0001, EncodeUTF16LE(computer))
 	avp(0x0004, EncodeUTF16LE(strings.ToLower(domain)))
 	avp(0x0003, EncodeUTF16LE(strings.ToLower(computer)+"."+strings.ToLower(domain)))
-	epoch := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
-	ft := uint64(time.Since(epoch).Nanoseconds() / 100)
 	ftb := make([]byte, 8)
-	binary.LittleEndian.PutUint64(ftb, ft)
+	binary.LittleEndian.PutUint64(ftb, FileTime(time.Now()))
 	avp(0x0007, ftb)
 	avp(0x0000, nil)
 	return b.Bytes()

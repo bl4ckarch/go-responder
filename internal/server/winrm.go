@@ -10,7 +10,9 @@ import (
 
 func ServeWinRM(ifaceIP net.IP) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", HandleHTTPNTLM)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		handleHTTPNTLM(w, r, "WinRM")
+	})
 
 	addr := fmt.Sprintf("%s:5985", ifaceIP)
 	ln, err := net.Listen("tcp", addr)

@@ -126,7 +126,10 @@ func buildTDSError(msg string) []byte {
 	}
 	var tok []byte
 	tok = append(tok, 0xAA)
-	length := uint16(4 + 1 + 1 + 2 + len(msgUTF16) + 1 + 1 + 1 + 2 + 2)
+	// Token length = everything after this field: number(4) + state(1) +
+	// class(1) + msg len(2) + msg + srvname len(1) + srvname + procname len(1)
+	// + line number(2).  (The previous +2 made clients mis-parse the token.)
+	length := uint16(4 + 1 + 1 + 2 + len(msgUTF16) + 1 + 1 + 1 + 2)
 	tok = append(tok, byte(length), byte(length>>8))
 	tok = append(tok, 0xE7, 0x13, 0x00, 0x00)
 	tok = append(tok, 0x01)

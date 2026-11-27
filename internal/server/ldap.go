@@ -30,7 +30,6 @@ func HandleLDAP(c net.Conn) {
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 
 	challenge := core.GetChallenge()
-	var msgID int
 
 	buf := make([]byte, 8192)
 	for {
@@ -52,6 +51,9 @@ func HandleLDAP(c net.Conn) {
 		if len(inner) < 3 || inner[0] != 0x02 {
 			return
 		}
+		// msgID is per LDAPMessage: reset it for every message on the
+		// connection instead of accumulating the previous value.
+		msgID := 0
 		idLen := int(inner[1])
 		if idLen > 4 || 2+idLen > len(inner) {
 			return
@@ -73,12 +75,18 @@ func HandleLDAP(c net.Conn) {
 			return
 		}
 		verLen := int(bindBody[1])
+		if 2+verLen > len(bindBody) {
+			return
+		}
 		bindBody = bindBody[2+verLen:]
 
 		if len(bindBody) < 2 || bindBody[0] != 0x04 {
 			return
 		}
 		nameLen := int(bindBody[1])
+		if 2+nameLen > len(bindBody) {
+			return
+		}
 		bindBody = bindBody[2+nameLen:]
 
 		if len(bindBody) < 2 {
@@ -95,6 +103,9 @@ func HandleLDAP(c net.Conn) {
 				return
 			}
 			mechLen := int(saslBody[1])
+			if 2+mechLen > len(saslBody) {
+				return
+			}
 			mech := string(saslBody[2 : 2+mechLen])
 			saslBody = saslBody[2+mechLen:]
 
@@ -107,6 +118,9 @@ func HandleLDAP(c net.Conn) {
 				return
 			}
 			credLen := berReadLen(saslBody[1:])
+			if credLen < 0 {
+				return
+			}
 			credOff := 1 + berLenBytes(credLen)
 			if credOff+credLen > len(saslBody) {
 				return
@@ -141,6 +155,9 @@ func HandleLDAP(c net.Conn) {
 
 		} else if authTag == 0x80 {
 			simpleLen := berReadLen(bindBody[1:])
+			if simpleLen < 0 {
+				return
+			}
 			simpleOff := 1 + berLenBytes(simpleLen)
 			if simpleOff+simpleLen > len(bindBody) {
 				return
@@ -188,6 +205,10 @@ func berTag(tag byte, data []byte) []byte {
 		out = append(out, 0x81, byte(l))
 	case l < 0x10000:
 		out = append(out, 0x82, byte(l>>8), byte(l))
+	case uint64(l) < 0x1000000:
+		out = append(out, 0x83, byte(l>>16), byte(l>>8), byte(l))
+	default:
+		out = append(out, 0x84, byte(l>>24), byte(l>>16), byte(l>>8), byte(l))
 	}
 	return append(out, data...)
 }
@@ -197,6 +218,9 @@ func berInner(data []byte) ([]byte, bool) {
 		return nil, false
 	}
 	l := berReadLen(data[1:])
+	if l < 0 {
+		return nil, false
+	}
 	lb := berLenBytes(l)
 	if 1+lb+l > len(data) {
 		return nil, false
@@ -204,6 +228,8 @@ func berInner(data []byte) ([]byte, bool) {
 	return data[1+lb : 1+lb+l], true
 }
 
+// berReadLen decodes a BER length.  It returns -1 for malformed or
+// unsupported (indefinite/longer than 4 octets) encodings.
 func berReadLen(data []byte) int {
 	if len(data) == 0 {
 		return 0
@@ -212,20 +238,32 @@ func berReadLen(data []byte) int {
 		return int(data[0])
 	}
 	n := int(data[0] & 0x7f)
+	if n == 0 || n > 4 || n >= len(data) {
+		return -1
+	}
 	l := 0
-	for i := 1; i <= n && i < len(data); i++ {
+	for i := 1; i <= n; i++ {
 		l = (l << 8) | int(data[i])
+	}
+	if l < 0 {
+		return -1
 	}
 	return l
 }
 
 func berLenBytes(l int) int {
 	switch {
+	case l < 0:
+		return 1
 	case l < 0x80:
 		return 1
 	case l < 0x100:
 		return 2
-	default:
+	case l < 0x10000:
 		return 3
+	case l < 0x1000000:
+		return 4
+	default:
+		return 5
 	}
 }

@@ -173,19 +173,28 @@ func buildDCERPCBindAck(callID uint32, authVerif []byte) []byte {
 		body = append(body, 0x00)
 	}
 
+	// p_result_list (MS-RPCE 2.2.2.5 / DCE 1.1): n_results(1), reserved(1),
+	// reserved2(2), then n_results * {result(2), reason(2), syntax uuid(16),
+	// syntax version(4)} = 28 bytes for one result.  The previous encoding had
+	// six extra zero bytes, shifting the transfer syntax and overrunning the
+	// fragment by 6 octets.
 	body = append(body,
-		0x01, 0x00,
-		0x00, 0x00,
-		0x00, 0x00,
-		0x00, 0x00,
+		0x01, 0x00, // n_results = 1, reserved
+		0x00, 0x00, // reserved2
+		0x00, 0x00, // result = acceptance
+		0x00, 0x00, // reason = 0
 		0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
 		0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
-		0x02, 0x00, 0x00, 0x00,
+		0x02, 0x00, 0x00, 0x00, // syntax version 2 (NTLMSSP)
 	)
 
+	// auth_len (MS-RPCE 2.2.2.11) covers the auth_value only, NOT the 8-byte
+	// auth verifier header; frag_len covers the whole verifier.  Both impacket
+	// and the DCE spec use that convention, so sending the header in auth_len
+	// made clients mis-locate the NTLM challenge.
 	authLen := uint16(0)
-	if authVerif != nil {
-		authLen = uint16(len(authVerif))
+	if len(authVerif) > 8 {
+		authLen = uint16(len(authVerif) - 8)
 	}
 	fragLen := uint16(16 + len(body) + len(authVerif))
 	hdr := buildDCERPCHeader(rpcPTYPEBindAck, fragLen, authLen, callID)
@@ -198,8 +207,9 @@ func buildDCERPCBindAck(callID uint32, authVerif []byte) []byte {
 }
 
 func buildDCERPCFault(callID uint32) []byte {
-	body := make([]byte, 8)
-	binary.LittleEndian.PutUint32(body[4:], 0x1c010002)
+	// alloc_hint(4) | p_cont_id(2) | cancel_count(1) | reserved(1) | status(4)
+	body := make([]byte, 12)
+	binary.LittleEndian.PutUint32(body[8:], 0x1c010002)
 	hdr := buildDCERPCHeader(rpcPTYPEFault, uint16(16+len(body)), 0, callID)
 	return append(hdr, body...)
 }

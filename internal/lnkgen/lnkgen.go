@@ -65,7 +65,10 @@ func BuildLNK(uncPath string) []byte {
 	})
 	binary.LittleEndian.PutUint32(hdr[20:], 0x00000001)
 	binary.LittleEndian.PutUint32(hdr[24:], 0x00000020)
-	binary.LittleEndian.PutUint32(hdr[64:], 0x00000001)
+	// ShowCommand lives at offset 60 (SW_SHOWNORMAL = 1).  Writing it at 64
+	// would clobber the hotkey/reserved fields instead and leave the shortcut
+	// configured to open hidden.
+	binary.LittleEndian.PutUint32(hdr[60:], 0x00000001)
 
 	uncBytes := []byte(uncPath + "\x00")
 	deviceBytes := []byte("\x00")

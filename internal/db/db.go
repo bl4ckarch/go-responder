@@ -4,6 +4,7 @@ package db
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -30,15 +31,26 @@ type DB struct {
 	seen    map[string]bool // key: lowercase "username@domain"
 }
 
-// Open loads (or creates) a DB at path.  Missing file is not an error.
+// Open loads (or creates) a DB at path.  A missing file is not an error; a
+// corrupt file is, so that Add() can never silently overwrite existing
+// captures with an empty list.
 func Open(path string) (*DB, error) {
 	d := &DB{path: path, seen: make(map[string]bool)}
 	data, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(data, &d.entries)
+	switch {
+	case err == nil:
+		if len(data) > 0 {
+			if err := json.Unmarshal(data, &d.entries); err != nil {
+				return nil, fmt.Errorf("credential DB %s is corrupt: %w", path, err)
+			}
+		}
 		for _, e := range d.entries {
 			d.seen[userKey(e.Username, e.Domain)] = true
 		}
+	case os.IsNotExist(err):
+		// fresh DB
+	default:
+		return nil, err
 	}
 	return d, nil
 }
@@ -85,7 +97,8 @@ func (d *DB) UniqueUsers() int {
 }
 
 func userKey(username, domain string) string {
-	return strings.ToLower(username + "@" + domain)
+	// NUL separator: "@" would let ("a@b","c") and ("a","b@c") collide.
+	return strings.ToLower(username) + "\x00" + strings.ToLower(domain)
 }
 
 func (d *DB) flush() error {

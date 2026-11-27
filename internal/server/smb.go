@@ -215,8 +215,7 @@ func smb1SMB2UpgradeResp(_ []byte) []byte { return smb2NegotiateResp(0) }
 func smb1NegotiateResp(req []byte, dialectIdx int) []byte {
 	mid := binary.LittleEndian.Uint16(req[30:32])
 	spnego := core.BuildSPNEGONegotiateToken()
-	epoch := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
-	ft := uint64(time.Since(epoch).Nanoseconds() / 100)
+	ft := core.FileTime(time.Now())
 	hdr := smb1Header(smb1CmdNegotiate, statusSuccess, 0xFFFF, mid)
 
 	var params []byte
@@ -316,8 +315,7 @@ func smb2Header(cmd uint16, msgID uint64, status uint32, sessionID uint64) []byt
 func smb2NegotiateResp(msgID uint64) []byte {
 	spnego := core.BuildSPNEGONegotiateToken()
 	hdr := smb2Header(smb2CmdNegotiate, msgID, statusSuccess, 0)
-	epoch := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
-	ft := uint64(time.Since(epoch).Nanoseconds() / 100)
+	ft := core.FileTime(time.Now())
 	secBufOff := uint16(64 + 64)
 
 	var b bytes.Buffer

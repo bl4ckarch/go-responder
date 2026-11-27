@@ -426,6 +426,14 @@ func TestServeDNSTCP_NeedRoot(t *testing.T) {
 
 // PoisonNBTNS: bind :137 fails without root → LogError + return
 func TestPoisonNBTNS_NeedRoot(t *testing.T) {
+	// Some distributions (Kali, and anything with
+	// net.ipv4.ip_unprivileged_port_start=0) let unprivileged users bind
+	// low ports, so the failure branch is unreachable there and the
+	// function would block in its read loop forever.
+	if probe, err := net.ListenPacket("udp4", "0.0.0.0:137"); err == nil {
+		probe.Close()
+		t.Skip("unprivileged low ports are allowed on this host; bind failure unreachable")
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
