@@ -39,6 +39,14 @@ func ResetHashLog() {
 	hashMu.Unlock()
 }
 
+// HashLogLen returns the number of in-session dedup keys.  Use it instead of
+// reading HashLog directly, which is guarded by hashMu.
+func HashLogLen() int {
+	hashMu.Lock()
+	defer hashMu.Unlock()
+	return len(HashLog)
+}
+
 func ts() string { return time.Now().Format("15:04:05") }
 
 // ── plain log helpers ─────────────────────────────────────────────────────────
@@ -98,14 +106,23 @@ func hashcatMode(version string) string {
 	case "NTLMv1":
 		return "-m 5500"
 	case "KRB5PA":
-		return "-m 19900"
+		// We emit "$krb5pa$23$..." (RC4-HMAC, etype 23) which is mode 7500.
+		// Mode 19900 expects the AES etype 17 format "$krb5pa$17$...".
+		return "-m 7500"
 	default:
 		return ""
 	}
 }
 
 // printCapture renders one credential capture event to stdout.
+// printMu keeps multi-line cards from interleaving when several servers
+// capture at the same time.
+var printMu sync.Mutex
+
 func printCapture(protocol, source, username, domain, version, detail string, isNew bool) {
+	printMu.Lock()
+	defer printMu.Unlock()
+
 	tag := CGreen + "★ NEW  " + CReset
 	if !isNew {
 		tag = CYellow + "✓ KNOWN" + CReset
@@ -115,8 +132,8 @@ func printCapture(protocol, source, username, domain, version, detail string, is
 	sep := strings.Repeat("─", 64)
 
 	// Header line
-	fmt.Printf("\n%s%s%s  %s[%s]%s  %s  %s%s%s  %s\n",
-		CDim, sep[:4], CReset,
+	fmt.Printf("\n%s────%s  %s[%s]%s  %s  %s%s%s  %s\n",
+		CDim, CReset,
 		pc, protocol, CReset,
 		tag,
 		CDim, version, CReset,
@@ -133,9 +150,9 @@ func printCapture(protocol, source, username, domain, version, detail string, is
 
 	// Hash / password
 	mode := hashcatMode(version)
-	if version == "CLEARTEXT" || version == "AS-REQ" {
+	if version == "CLEARTEXT" || version == "AS-REQ" || version == "TGS-REQ" {
 		label := "Password"
-		if version == "AS-REQ" {
+		if version == "AS-REQ" || version == "TGS-REQ" {
 			label = "Principal"
 		}
 		fmt.Printf("   %s%-8s%s  %s%s%s\n",
@@ -181,18 +198,20 @@ func SaveCapture(protocol, source, username, domain, version, hash string) {
 
 	// Persist to DB.
 	if HashDB != nil {
-		_ = HashDB.Add(db.Entry{
+		if err := HashDB.Add(db.Entry{
 			Protocol: protocol,
 			Source:   source,
 			Username: username,
 			Domain:   domain,
 			Version:  version,
 			Hash:     hash,
-		})
+		}); err != nil {
+			LogError("credential DB write failed: %v", err)
+		}
 	}
 
 	// Write hashcat-compatible text file.
-	if version != "CLEARTEXT" && version != "AS-REQ" {
+	if version != "CLEARTEXT" && version != "AS-REQ" && version != "TGS-REQ" {
 		hashMu.Lock()
 		f, err := os.OpenFile(OutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
@@ -210,19 +229,35 @@ func SaveCleartext(protocol, source, username, domain, password string) {
 	isNew := true
 	if HashDB != nil {
 		isNew = !HashDB.HasUser(username, domain)
+	} else {
+		// same in-memory fallback used by SaveCapture
+		hashMu.Lock()
+		key := strings.ToLower(username + "@" + domain)
+		for _, h := range HashLog {
+			if h == key {
+				isNew = false
+				break
+			}
+		}
+		if isNew {
+			HashLog = append(HashLog, key)
+		}
+		hashMu.Unlock()
 	}
 
 	printCapture(protocol, source, username, domain, "CLEARTEXT", password, isNew)
 
 	if isNew && HashDB != nil {
-		_ = HashDB.Add(db.Entry{
+		if err := HashDB.Add(db.Entry{
 			Protocol: protocol,
 			Source:   source,
 			Username: username,
 			Domain:   domain,
 			Version:  "CLEARTEXT",
 			Hash:     password,
-		})
+		}); err != nil {
+			LogError("credential DB write failed: %v", err)
+		}
 	}
 }
 

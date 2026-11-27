@@ -142,7 +142,7 @@ func TestHandleFTP_AuthNTLM(t *testing.T) {
 		t.Fatalf("want 530 after type3, got %q", resp530)
 	}
 
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash to be captured")
 	}
 }
@@ -682,7 +682,7 @@ func TestHandleDCERPC_Auth3Type3CapturesHash(t *testing.T) {
 	client.Write(auth3Pkt)
 
 	time.Sleep(200 * time.Millisecond)
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash to be captured via DCE-RPC")
 	}
 }
@@ -880,7 +880,7 @@ func TestHandleProxy_FullNTLMExchange(t *testing.T) {
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via proxy NTLM")
 	}
 }
@@ -1022,7 +1022,7 @@ func TestHandleHTTPNTLM_Type3_CapturesHash(t *testing.T) {
 	if w3.Code != 401 {
 		t.Fatalf("type3 want 401, got %d", w3.Code)
 	}
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via HTTP NTLM")
 	}
 }
@@ -1551,7 +1551,7 @@ func TestHandleLDAP_SASL_FullNTLM(t *testing.T) {
 	client.Write(pkt2)
 
 	time.Sleep(300 * time.Millisecond)
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via LDAP SASL NTLM")
 	}
 }
@@ -1713,7 +1713,7 @@ func TestHandleSMB_SessionSetup_FullNTLMCapture(t *testing.T) {
 	sendNBFrame(client, ssReq2)
 
 	time.Sleep(300 * time.Millisecond)
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via SMB2 session setup type3")
 	}
 }
@@ -1943,7 +1943,7 @@ func TestHandlePOP3_NTLM_FullFlow(t *testing.T) {
 		t.Fatalf("Type3: want -ERR, got %q", resp)
 	}
 
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via POP3 NTLM")
 	}
 }
@@ -2006,7 +2006,7 @@ func TestHandleMSSQL_SSPI_Type1_Type3(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(2 * time.Second))
 	client.Read(resp3)
 
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via MSSQL SSPI")
 	}
 }
@@ -2158,7 +2158,7 @@ func TestHandleSMB_SMB1FullNTLM(t *testing.T) {
 	sendNBFrame(client, buildSMB1SessionSetupType1(type3))
 	// Server sends error + closes
 	time.Sleep(300 * time.Millisecond)
-	if len(core.HashLog) == 0 {
+	if core.HashLogLen() == 0 {
 		t.Fatal("expected hash captured via SMB1 session setup")
 	}
 }

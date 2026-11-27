@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"time"
 
+	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
 )
 
@@ -32,6 +34,7 @@ func ServeDNS(ifaceIP net.IP) {
 func serveDNSTCP(ifaceIP net.IP) {
 	ln, err := net.Listen("tcp4", fmt.Sprintf("%s:53", ifaceIP))
 	if err != nil {
+		core.LogError("DNS  TCP listen :53 - %v (need root?)", err)
 		return
 	}
 	for {
@@ -41,6 +44,7 @@ func serveDNSTCP(ifaceIP net.IP) {
 		}
 		go func(c net.Conn) {
 			defer c.Close()
+			c.SetDeadline(time.Now().Add(10 * time.Second))
 			lenBuf := make([]byte, 2)
 			if _, err := readFull(c, lenBuf); err != nil {
 				return
@@ -50,16 +54,7 @@ func serveDNSTCP(ifaceIP net.IP) {
 			if _, err := readFull(c, pkt); err != nil {
 				return
 			}
-			name := ParseLLMNRQuery(pkt)
-			if name == "" {
-				return
-			}
-			core.LogVerbose("DNS/TCP query: %s", name)
-			if core.AnalyzeMode {
-				core.LogInfo("[DNS] [Analyze] query for '%s'", name)
-				return
-			}
-			resp := BuildDNSResponse(pkt, ifaceIP)
+			resp := processDNSQuery(pkt, c.RemoteAddr(), ifaceIP)
 			if resp == nil {
 				return
 			}
@@ -72,20 +67,40 @@ func serveDNSTCP(ifaceIP net.IP) {
 }
 
 func HandleDNSQuery(conn net.PacketConn, src net.Addr, pkt []byte, ip net.IP) {
-	name := ParseLLMNRQuery(pkt)
-	if name == "" {
-		return
-	}
-	core.LogVerbose("DNS  query: %s from %s", name, src)
-	if core.AnalyzeMode {
-		core.LogInfo("[DNS] [Analyze] query for '%s' from %s", name, src)
-		return
-	}
-	resp := BuildDNSResponse(pkt, ip)
+	resp := processDNSQuery(pkt, src, ip)
 	if resp != nil && conn != nil {
 		conn.WriteTo(resp, src)
+	}
+}
+
+// processDNSQuery applies analyze-mode and the RespondTo/DontRespondTo filters
+// (like the other poisoners) and returns the poisoned answer, or nil.
+func processDNSQuery(pkt []byte, src net.Addr, ip net.IP) []byte {
+	name := ParseLLMNRQuery(pkt)
+	if name == "" {
+		return nil
+	}
+	core.LogVerbose("DNS  query: %s from %s", name, src)
+	srcIP := core.AddrToIP(src)
+	if srcIP != nil {
+		analyzer.Global.RegisterQuery(srcIP, name)
+	}
+	if core.AnalyzeMode {
+		core.LogInfo("[DNS] [Analyze] query for '%s' from %s", name, src)
+		return nil
+	}
+	if !core.ShouldRespond(src, name) {
+		return nil
+	}
+	if srcIP != nil && !analyzer.Global.ShouldPoison(srcIP) {
+		core.LogVerbose("[DNS] [Selective] skipping %s (signing=required)", srcIP)
+		return nil
+	}
+	resp := BuildDNSResponse(pkt, ip)
+	if resp != nil {
 		core.LogInfo("[DNS] Poisoned query for '%s' - responding with %s", name, ip)
 	}
+	return resp
 }
 
 func BuildDNSResponse(query []byte, ip net.IP) []byte {

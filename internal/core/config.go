@@ -78,6 +78,31 @@ func GenPort() int {
 	return int(n.Int64()) + 20000
 }
 
+// PickFreePort returns preferred when it can be bound on ip, otherwise another
+// random port that can be; last resort is an OS-assigned ephemeral port.
+// GenPort alone can hand out a port that is already in use (the DCE-RPC server
+// would then silently fail to start).
+func PickFreePort(ip net.IP, preferred int) int {
+	host := ip.String()
+	for attempt := 0; attempt < 20; attempt++ {
+		port := preferred
+		if attempt > 0 {
+			port = GenPort()
+		}
+		ln, err := net.Listen("tcp4", fmt.Sprintf("%s:%d", host, port))
+		if err == nil {
+			ln.Close()
+			return port
+		}
+	}
+	if ln, err := net.Listen("tcp4", fmt.Sprintf("%s:0", host)); err == nil {
+		port := ln.Addr().(*net.TCPAddr).Port
+		ln.Close()
+		return port
+	}
+	return preferred
+}
+
 // GetDefaultIface returns the name and IPv4 of the first non-loopback, up interface.
 func GetDefaultIface() (string, net.IP, error) {
 	ifaces, err := net.Interfaces()

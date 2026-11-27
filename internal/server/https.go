@@ -25,7 +25,9 @@ func ServeHTTPS(ifaceIP net.IP) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", HandleHTTPNTLM)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		handleHTTPNTLM(w, r, "HTTPS")
+	})
 
 	addr := fmt.Sprintf("%s:443", ifaceIP)
 	ln, err := net.Listen("tcp", addr)

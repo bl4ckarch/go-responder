@@ -50,7 +50,7 @@ func HandleSMTP(c net.Conn) {
 		case strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO"):
 			send("250-" + core.SessionMachineName)
 			send("250-AUTH NTLM")
-			send("250 AUTH NTLM")
+			send("250 OK")
 
 		case upper == "AUTH NTLM" || strings.HasPrefix(upper, "AUTH NTLM "):
 			var token string

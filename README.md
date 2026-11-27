@@ -209,9 +209,9 @@ NTLMv1 with `-lm` (hashcat `-m 5500`):
 USER::DOMAIN:LMResponse:NTResponse:CHALLENGE
 ```
 
-Kerberos PA-ENC-TIMESTAMP (hashcat `-m 19900`):
+Kerberos PA-ENC-TIMESTAMP (hashcat `-m 7500`, RC4-HMAC etype 23):
 ```
-$krb5pa$23$USER$REALM$hex-encrypted-data
+$krb5pa$23$USER$REALM$hex-ciphertext
 ```
 
 ## Testing

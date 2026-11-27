@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -90,6 +91,24 @@ func main() {
 		*dontRespondToName = v
 	}
 
+	// A typo in a filter IP used to produce an empty list, which silently
+	// disabled filtering altogether (poison everyone).
+	for _, spec := range []struct{ name, val string }{
+		{"-RespondTo", *respondTo},
+		{"-DontRespondTo", *dontRespondTo},
+	} {
+		for _, part := range strings.Split(spec.val, ",") {
+			if part = strings.TrimSpace(part); part != "" && net.ParseIP(part) == nil {
+				fmt.Fprintf(os.Stderr, "[-] invalid IP %q in %s\n", part, spec.name)
+				os.Exit(1)
+			}
+		}
+	}
+	if core.OutFile == "" {
+		fmt.Fprintln(os.Stderr, "[-] -o (hash output file) must not be empty")
+		os.Exit(1)
+	}
+
 	resolveIface := func() (net.IP, error) {
 		if *iface == "" {
 			name, ip, err := core.GetDefaultIface()
@@ -124,6 +143,13 @@ func main() {
 	}
 
 	core.IfaceName = *iface
+	if *challenge != "" {
+		b, err := hex.DecodeString(strings.ReplaceAll(*challenge, " ", ""))
+		if err != nil || len(b) != 8 {
+			fmt.Fprintf(os.Stderr, "[-] invalid -c challenge %q: expected 16 hex characters (8 bytes)\n", *challenge)
+			os.Exit(1)
+		}
+	}
 	core.InitSession(*challenge)
 	core.AnalyzeMode = *analyze
 	core.LMMode = *lm
@@ -142,6 +168,11 @@ func main() {
 		os.Exit(1)
 	}
 	core.HashDB = hashDB
+
+	// Pick a DCE-RPC port that is actually free before announcing it.
+	if !*noDCERPC {
+		core.SessionDCERPCPort = core.PickFreePort(ip, core.SessionDCERPCPort)
+	}
 
 	fmt.Print(banner)
 	printStartup(ip, *dbPath, *noSMB, *noHTTP, *noHTTPS, *noFTP, *noSMTP, *noPOP3, *noIMAP, *noLDAP, *noDNS, *noDCERPC, *noMSSQL, *noWinRM, *noKerberos, *noProxy, *selective)
@@ -216,7 +247,7 @@ func main() {
 	printShutdown(hashDB)
 }
 
-func printStartup(ip interface{}, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy, selective bool) {
+func printStartup(ip net.IP, dbPath string, noSMB, noHTTP, noHTTPS, noFTP, noSMTP, noPOP3, noIMAP, noLDAP, noDNS, noDCERPC, noMSSQL, noWinRM, noKerberos, noProxy, selective bool) {
 	on := func(disabled bool) string {
 		if disabled {
 			return core.CRed + "OFF" + core.CReset

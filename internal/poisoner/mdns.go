@@ -1,10 +1,8 @@
 package poisoner
 
 import (
-	"context"
 	"encoding/binary"
 	"net"
-	"syscall"
 
 	"go-responder/internal/analyzer"
 	"go-responder/internal/core"
@@ -19,35 +17,13 @@ func PoisonMDNS(ifaceIP net.IP) {
 		core.LogError("mDNS: no interface for %s - %v", ifaceIP, err)
 		return
 	}
-	ip4 := ifaceIP.To4()
-	if ip4 == nil {
+	if ifaceIP.To4() == nil {
 		core.LogError("mDNS: no IPv4 address on %s", ifaceIP)
 		return
 	}
 
-
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			var ctlErr error
-			c.Control(func(fd uintptr) {
-				mreq := &syscall.IPMreqn{
-					Multiaddr: [4]byte{224, 0, 0, 251},
-					Ifindex:   int32(iface.Index),
-				}
-				if ctlErr = syscall.SetsockoptIPMreqn(int(fd), syscall.IPPROTO_IP, syscall.IP_ADD_MEMBERSHIP, mreq); ctlErr != nil {
-					return
-				}
-
-				if ctlErr = syscall.SetsockoptInet4Addr(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_IF, [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]}); ctlErr != nil {
-					return
-				}
-
-				ctlErr = syscall.SetsockoptByte(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, 255)
-			})
-			return ctlErr
-		},
-	}
-	pc, err := lc.ListenPacket(context.Background(), "udp4", ":5353")
+	// RFC 6762 §11: mDNS multicast packets use IP TTL 255.
+	pc, err := listenMulticast(iface, ifaceIP, [4]byte{224, 0, 0, 251}, mdnsPort, 255)
 	if err != nil {
 		core.LogError("mDNS: bind :5353 failed (root?) - %v", err)
 		return
@@ -93,7 +69,6 @@ func PoisonMDNS(ifaceIP net.IP) {
 		}
 	}
 }
-
 
 func BuildMDNSResponse(query []byte, ip net.IP) []byte {
 	if len(query) < 12 {

@@ -1,3 +1,8 @@
+//go:build linux
+
+// DHCPv6/Router-Advertisement spoofing relies on raw ICMPv6 sockets and
+// IPv6 socket options that only exist on Linux.
+
 package poisoner
 
 import (
@@ -192,9 +197,17 @@ func buildDHCPv6Msg(msgType byte, txID [3]byte, clientDUID []byte, iface *net.In
 // buildDUIDLL builds a DUID-LL (Link-Layer, type 3) from the interface MAC.
 // Format: type(2) + hw_type(2) + mac(6) = 10 bytes.
 func buildDUIDLL(iface *net.Interface) []byte {
-	mac := iface.HardwareAddr
-	if len(mac) == 0 {
-		mac = make([]byte, 6)
+	var mac []byte
+	if iface != nil {
+		mac = iface.HardwareAddr
+	}
+	if len(mac) > 6 {
+		mac = mac[:6]
+	}
+	if len(mac) < 6 {
+		padded := make([]byte, 6)
+		copy(padded, mac)
+		mac = padded
 	}
 	duid := []byte{0x00, 0x03, 0x00, 0x01}
 	return append(duid, mac...)
